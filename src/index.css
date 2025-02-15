@@ -1,0 +1,50 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* React Select Styles */
+.react-select-container {
+  @apply relative;
+}
+
+.react-select__menu-portal {
+  @apply z-[9999];
+}
+
+.react-select__control {
+  @apply !border-gray-300 hover:!border-primary-500;
+  min-height: 38px !important;
+}
+
+.react-select__control--is-focused {
+  @apply !border-primary-500 !shadow-none;
+  box-shadow: 0 0 0 1px #0ea5e9 !important;
+}
+
+.react-select__value-container {
+  @apply !p-0.5;
+}
+
+.react-select__input-container {
+  @apply !m-0 !p-0;
+}
+
+.react-select__menu {
+  @apply !mt-1 !bg-white !border !border-gray-300 !rounded-md;
+}
+
+.react-select__option {
+  @apply !text-gray-900 !bg-white hover:!bg-gray-100;
+}
+
+.react-select__option--is-focused {
+  @apply !bg-gray-100;
+}
+
+.react-select__option--is-selected {
+  @apply !bg-primary-500 !text-white;
+}
+
+.react-select__placeholder {
+  @apply !text-gray-500;
+}
