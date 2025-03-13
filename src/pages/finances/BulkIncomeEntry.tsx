@@ -6,22 +6,31 @@ import { useCurrencyStore } from '../../stores/currencyStore';
 import { formatCurrency } from '../../utils/currency';
 import { parse, format, isValid } from 'date-fns';
 import * as XLSX from 'xlsx';
+import { Card, CardHeader, CardContent } from '../../components/ui2/card';
+import { Input } from '../../components/ui2/input';
+import { Button } from '../../components/ui2/button';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../../components/ui2/select';
+import { DatePickerInput } from '../../components/ui2/date-picker';
+import { Combobox } from '../../components/ui2/combobox';
+import { Badge } from '../../components/ui2/badge';
 import {
-  ArrowLeft,
-  Save,
-  Loader2,
-  AlertCircle,
-  CheckCircle2,
-  Upload,
   Plus,
   Minus,
   Download,
+  Upload,
+  ArrowLeft,
+  Save,
+  Loader2,
+  Calculator,
+  PieChart,
+  Users,
+  DollarSign,
 } from 'lucide-react';
 
 type BulkEntry = {
   member_id: string;
   amount: number;
-  category: string;
+  category_id: string;
   description: string;
   date: string;
   envelope_number?: string;
@@ -44,23 +53,56 @@ function BulkIncomeEntry() {
   const [entries, setEntries] = useState<BulkEntry[]>([{
     member_id: '',
     amount: 0,
-    category: 'tithe',
+    category_id: '',
     description: '',
     date: new Date().toISOString().split('T')[0],
     envelope_number: '',
   }]);
 
+  // Get current tenant
+  const { data: currentTenant } = useQuery({
+    queryKey: ['current-tenant'],
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc('get_current_tenant');
+      if (error) throw error;
+      return data?.[0];
+    },
+  });
+
+  // Get members
   const { data: members } = useQuery({
-    queryKey: ['members'],
+    queryKey: ['members', currentTenant?.id],
     queryFn: async () => {
       const { data, error } = await supabase
         .from('members')
         .select('id, first_name, last_name, envelope_number')
+        .eq('tenant_id', currentTenant?.id)
+        .is('deleted_at', null)
         .order('last_name');
 
       if (error) throw error;
       return data as Member[];
     },
+    enabled: !!currentTenant?.id,
+  });
+
+  // Get income categories
+  const { data: categories } = useQuery({
+    queryKey: ['categories', 'income_transaction', currentTenant?.id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('categories')
+        .select('*')
+        .eq('tenant_id', currentTenant?.id)
+        .eq('is_active', true)
+        .eq('type', 'income_transaction')
+        .is('deleted_at', null)
+        .order('sort_order');
+
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!currentTenant?.id,
   });
 
   const addBulkEntriesMutation = useMutation({
@@ -76,6 +118,7 @@ function BulkIncomeEntry() {
           const { data: members, error: lookupError } = await supabase
             .from('members')
             .select('id')
+            .eq('tenant_id', currentTenant?.id)
             .eq('envelope_number', entry.envelope_number.trim());
 
           if (lookupError) {
@@ -97,12 +140,12 @@ function BulkIncomeEntry() {
           throw new Error(`Either member or envelope number must be provided (Entry #${index + 1})`);
         }
 
-        // Create the transaction without the envelope_number field
         return {
           type: 'income' as const,
+          tenant_id: currentTenant?.id,
           member_id: memberId,
           amount: entry.amount,
-          category: entry.category,
+          category_id: entry.category_id,
           description: entry.description || '',
           date: entry.date,
           created_by: user?.id,
@@ -124,7 +167,7 @@ function BulkIncomeEntry() {
       setEntries([{
         member_id: '',
         amount: 0,
-        category: 'tithe',
+        category_id: '',
         description: '',
         date: new Date().toISOString().split('T')[0],
         envelope_number: '',
@@ -143,7 +186,7 @@ function BulkIncomeEntry() {
     const validEntries = entries.filter(entry => 
       (entry.member_id || entry.envelope_number) && // Allow either member_id or envelope_number
       entry.amount > 0 && 
-      entry.category && 
+      entry.category_id && 
       entry.date
     );
 
@@ -163,7 +206,7 @@ function BulkIncomeEntry() {
     setEntries([...entries, {
       member_id: '',
       amount: 0,
-      category: 'tithe',
+      category_id: '',
       description: '',
       date: new Date().toISOString().split('T')[0],
       envelope_number: '',
@@ -222,7 +265,7 @@ function BulkIncomeEntry() {
         throw new Error('Either member_id or envelope_number column must be present');
       }
 
-      const requiredHeaders = ['amount', 'category', 'date'];
+      const requiredHeaders = ['amount', 'category_id', 'date'];
       const missingHeaders = requiredHeaders.filter(h => !headers.includes(h));
 
       if (missingHeaders.length > 0) {
@@ -265,8 +308,8 @@ function BulkIncomeEntry() {
             throw new Error(`Either member_id or envelope_number must be provided in row ${index + 2}`);
           }
 
-          if (!entry.category) {
-            throw new Error(`Missing category in row ${index + 2}`);
+          if (!entry.category_id) {
+            throw new Error(`Missing category_id in row ${index + 2}`);
           }
 
           return entry;
@@ -301,9 +344,9 @@ function BulkIncomeEntry() {
 
     // Transactions sheet (template)
     const transactionsData = [
-      ['member_id', 'amount', 'category', 'date', 'description', 'envelope_number'],
-      ['member-uuid', 1000, 'tithe', '2025-02-12', 'Sunday Tithe', '001'],
-      ['member-uuid', 500, 'love_offering', '2025-02-12', 'Love Offering', '002'],
+      ['member_id', 'amount', 'category_id', 'date', 'description', 'envelope_number'],
+      ['member-uuid', 1000, 'category-uuid', '2025-02-12', 'Sunday Tithe', '001'],
+      ['member-uuid', 500, 'category-uuid', '2025-02-12', 'Love Offering', '002'],
     ];
     const wsTransactions = XLSX.utils.aoa_to_sheet(transactionsData);
 
@@ -311,7 +354,7 @@ function BulkIncomeEntry() {
     wsTransactions['!cols'] = [
       { wch: 40 }, // member_id
       { wch: 10 }, // amount
-      { wch: 15 }, // category
+      { wch: 40 }, // category_id
       { wch: 12 }, // date
       { wch: 30 }, // description
       { wch: 15 }, // envelope_number
@@ -321,13 +364,12 @@ function BulkIncomeEntry() {
 
     // Member Reference sheet with actual member data
     const membersData = [
-      ['member_id', 'first_name', 'last_name', 'envelope_number', 'valid_categories'],
+      ['member_id', 'first_name', 'last_name', 'envelope_number'],
       ...members.map(member => [
         member.id,
         member.first_name,
         member.last_name,
         member.envelope_number || '',
-        'tithe, first_fruit_offering, love_offering, mission_offering, mission_pledge, building_offering, lot_offering, other'
       ])
     ];
     const wsMembers = XLSX.utils.aoa_to_sheet(membersData);
@@ -338,28 +380,25 @@ function BulkIncomeEntry() {
       { wch: 15 }, // first_name
       { wch: 15 }, // last_name
       { wch: 15 }, // envelope_number
-      { wch: 100 }, // valid_categories
     ];
 
     XLSX.utils.book_append_sheet(wb, wsMembers, 'Member Reference');
 
     // Categories Reference sheet
     const categoriesData = [
-      ['Category Code', 'Description'],
-      ['tithe', 'Regular tithe contributions'],
-      ['first_fruit_offering', 'First fruit offerings'],
-      ['love_offering', 'Love offerings'],
-      ['mission_offering', 'Mission offerings'],
-      ['mission_pledge', 'Mission pledges'],
-      ['building_offering', 'Building fund offerings'],
-      ['lot_offering', 'Lot acquisition offerings'],
-      ['other', 'Other types of income'],
+      ['Category ID', 'Name', 'Description'],
+      ...(categories?.map(category => [
+        category.id,
+        category.name,
+        category.description || ''
+      ]) || [])
     ];
     const wsCategories = XLSX.utils.aoa_to_sheet(categoriesData);
 
     // Add column widths
     wsCategories['!cols'] = [
-      { wch: 20 }, // Category Code
+      { wch: 40 }, // Category ID
+      { wch: 20 }, // Name
       { wch: 40 }, // Description
     ];
 
@@ -381,8 +420,8 @@ function BulkIncomeEntry() {
       ['   - The Member Reference sheet contains actual member data from the system'],
       [''],
       ['3. Categories:'],
-      ['   - Refer to the "Categories Reference" sheet for valid category codes'],
-      ['   - Use the exact category codes as shown'],
+      ['   - Refer to the "Categories Reference" sheet for valid category IDs'],
+      ['   - Use the exact category IDs as shown'],
       [''],
       ['4. Tips:'],
       ['   - Save your file as .xlsx format'],
@@ -395,49 +434,100 @@ function BulkIncomeEntry() {
     // Add column width
     wsInstructions['!cols'] = [{ wch: 80 }];
 
-    // Add some basic formatting
-    wsInstructions['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 3 } }];
-
     XLSX.utils.book_append_sheet(wb, wsInstructions, 'Instructions');
 
     // Save the file
     XLSX.writeFile(wb, 'bulk-income-template.xlsx');
   };
 
-  const formatStatus = (status: string) => {
-    return status.split('_').map(word => 
-      word.charAt(0).toUpperCase() + word.slice(1)
-    ).join(' ');
-  };
+  // Calculate running totals
+  const runningTotals = React.useMemo(() => {
+    // Calculate total with proper decimal handling
+    const total = Number(entries.reduce((sum, t) => {
+      const amount = Number(t.amount) || 0;
+      return Number((sum + amount).toFixed(2));
+    }, 0));
+
+    // Calculate category totals with proper decimal handling
+    const categoryTotals: Record<string, number> = {};
+    entries.forEach(t => {
+      if (t.category_id && t.amount) {
+        const amount = Number(t.amount) || 0;
+        const currentTotal = categoryTotals[t.category_id] || 0;
+        categoryTotals[t.category_id] = Number((currentTotal + amount).toFixed(2));
+      }
+    });
+
+    // Calculate member totals with proper decimal handling
+    const memberTotals: Record<string, number> = {};
+    entries.forEach(t => {
+      const memberId = t.member_id;
+      if (memberId && t.amount) {
+        const amount = Number(t.amount) || 0;
+        const currentTotal = memberTotals[memberId] || 0;
+        memberTotals[memberId] = Number((currentTotal + amount).toFixed(2));
+      }
+    });
+
+    return {
+      total,
+      categoryTotals,
+      memberTotals
+    };
+  }, [entries]);
+
+  // Convert members to Combobox options
+  const memberOptions = React.useMemo(() => 
+    members?.map(m => ({
+      value: m.id,
+      label: `${m.first_name} ${m.last_name}${m.envelope_number ? ` (${m.envelope_number})` : ''}`
+    })) || [], 
+    [members]
+  );
+
+  // Convert categories to Combobox options
+  const categoryOptions = React.useMemo(() => 
+    categories?.map(c => ({
+      value: c.id,
+      label: c.name
+    })) || [],
+    [categories]
+  );
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       <div className="mb-6">
-        <button
+        <Button
+          variant="ghost"
           onClick={() => navigate('/finances')}
-          className="flex items-center text-gray-600 hover:text-gray-900"
+          className="flex items-center"
         >
           <ArrowLeft className="h-5 w-5 mr-2" />
           Back to Finances
-        </button>
+        </Button>
       </div>
 
       <div className="sm:flex sm:items-center sm:justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900">Bulk Income Entry</h1>
-          <p className="mt-2 text-sm text-gray-700">
+          <h1 className="text-2xl font-semibold text-foreground">Bulk Income Entry</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
             Add multiple income transactions at once
           </p>
         </div>
         <div className="mt-4 sm:mt-0 flex space-x-3">
-          <button
+          <Button
+            variant="outline"
             onClick={downloadSampleCSV}
-            className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+            className="flex items-center"
           >
             <Download className="h-4 w-4 mr-2" />
-            Download Sample CSV
-          </button>
-          <label className="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 cursor-pointer">
+            Download Template
+          </Button>
+          <Button
+            variant="default"
+            className="flex items-center"
+            onClick={() => fileInputRef.current?.click()}
+          >
             <Upload className="h-4 w-4 mr-2" />
             Import CSV
             <input
@@ -447,204 +537,233 @@ function BulkIncomeEntry() {
               onChange={handleFileUpload}
               className="hidden"
             />
-          </label>
+          </Button>
         </div>
       </div>
 
+      {/* Running Totals */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3 mb-8">
+        {/* Overall Total */}
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center">
+                <Calculator className="h-5 w-5 text-primary mr-2" />
+                <h3 className="text-sm font-medium text-foreground">Running Total</h3>
+              </div>
+              <Badge variant="success">
+                Income
+              </Badge>
+            </div>
+            <p className="mt-2 text-2xl font-semibold text-foreground">
+              {formatCurrency(runningTotals.total || 0, currency)}
+            </p>
+          </CardContent>
+        </Card>
+
+        {/* Category Breakdown */}
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex items-center mb-4">
+              <PieChart className="h-5 w-5 text-primary mr-2" />
+              <h3 className="text-sm font-medium text-foreground">By Category</h3>
+            </div>
+            <div className="space-y-2 max-h-32 overflow-y-auto pr-2">
+              {Object.entries(runningTotals.categoryTotals).map(([categoryId, amount]) => {
+                const category = categories?.find(c => c.id === categoryId);
+                return (
+                  <div key={categoryId} className="flex justify-between items-center py-1 border-b border-border last:border-0">
+                    <span className="text-sm text-muted-foreground truncate mr-2">
+                      {category?.name || 'Unknown'}
+                    </span>
+                    <span className="text-sm font-medium text-foreground whitespace-nowrap">
+                      {formatCurrency(amount || 0, currency)}
+                    </span>
+                  </div>
+                );
+              })}
+              {Object.keys(runningTotals.categoryTotals).length === 0 && (
+                <div className="text-sm text-muted-foreground text-center py-2">
+                  No categories yet
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Member Breakdown */}
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex items-center mb-4">
+              <Users className="h-5 w-5 text-primary mr-2" />
+              <h3 className="text-sm font-medium text-foreground">By Member</h3>
+            </div>
+            <div className="space-y-2 max-h-32 overflow-y-auto pr-2">
+              {Object.entries(runningTotals.memberTotals).map(([memberId, amount]) => {
+                const member = members?.find(m => m.id === memberId);
+                return (
+                  <div key={memberId} className="flex justify-between items-center py-1 border-b border-border last:border-0">
+                    <span className="text-sm text-muted-foreground truncate mr-2">
+                      {member ? `${member.first_name} ${member.last_name}` : 'Unknown'}
+                    </span>
+                    <span className="text-sm font-medium text-foreground whitespace-nowrap">
+                      {formatCurrency(amount || 0, currency)}
+                    </span>
+                  </div>
+                );
+              })}
+              {Object.keys(runningTotals.memberTotals).length === 0 && (
+                <div className="text-sm text-muted-foreground text-center py-2">
+                  No members yet
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
       {error && (
-        <div className="mb-4 rounded-md bg-red-50 p-4">
+        <div className="mb-6 rounded-lg bg-destructive/15 p-4">
           <div className="flex">
-            <AlertCircle className="h-5 w-5 text-red-400" />
             <div className="ml-3">
-              <h3 className="text-sm font-medium text-red-800">{error}</h3>
+              <h3 className="text-sm font-medium text-destructive">{error}</h3>
             </div>
           </div>
         </div>
       )}
 
       {success && (
-        <div className="mb-4 rounded-md bg-green-50 p-4">
+        <div className="mb-6 rounded-lg bg-success/15 p-4">
           <div className="flex">
-            <CheckCircle2 className="h-5 w-5 text-green-400" />
             <div className="ml-3">
-              <h3 className="text-sm font-medium text-green-800">{success}</h3>
+              <h3 className="text-sm font-medium text-success">{success}</h3>
             </div>
           </div>
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="bg-white shadow overflow-hidden sm:rounded-lg">
-          <div className="px-4 py-5 sm:p-6">
+      <Card>
+        <form onSubmit={handleSubmit} className="p-6">
+          <div className="space-y-6">
             {entries.map((entry, index) => (
-              <div key={index} className="mb-6 pb-6 border-b border-gray-200 last:border-0 last:mb-0 last:pb-0">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-lg font-medium text-gray-900">Entry #{index + 1}</h3>
+              <div key={index} className="space-y-4 pb-6 border-b border-border last:border-0">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-lg font-medium text-foreground">Entry #{index + 1}</h3>
                   {entries.length > 1 && (
-                    <button
-                      type="button"
+                    <Button
+                      variant="destructive"
+                      size="sm"
                       onClick={() => handleRemoveRow(index)}
-                      className="inline-flex items-center px-3 py-1 border border-transparent text-sm font-medium rounded-md text-red-700 bg-red-100 hover:bg-red-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                      className="flex items-center"
                     >
-                      <Minus className="h-4 w-4 mr-1" />
+                      <Minus className="h-4 w-4 mr-2" />
                       Remove
-                    </button>
+                    </Button>
                   )}
                 </div>
 
-                <div className="grid grid-cols-1 gap-y-6 gap-x-4 sm:grid-cols-2 lg:grid-cols-3">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                   <div>
-                    <label htmlFor={`member-${index}`} className="block text-sm font-medium text-gray-700">
-                      Member
-                    </label>
-                    <select
-                      id={`member-${index}`}
+                    <Combobox
+                      options={memberOptions}
                       value={entry.member_id}
-                      onChange={(e) => handleInputChange(index, 'member_id', e.target.value)}
-                      className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
-                    >
-                      <option value="">Select a member</option>
-                      {members?.map((member) => (
-                        <option key={member.id} value={member.id}>
-                          {member.first_name} {member.last_name}
-                          {member.envelope_number && ` (Envelope #${member.envelope_number})`}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(value) => handleInputChange(index, 'member_id', value)}
+                      placeholder="Select Member"
+                    />
                   </div>
 
                   <div>
-                    <label htmlFor={`envelope-${index}`} className="block text-sm font-medium text-gray-700">
-                      Envelope Number
-                    </label>
-                    <input
-                      type="text"
-                      id={`envelope-${index}`}
+                    <Input
+                      placeholder="Envelope Number"
                       value={entry.envelope_number || ''}
                       onChange={(e) => handleInputChange(index, 'envelope_number', e.target.value)}
-                      pattern="[0-9]*"
-                      className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
-                      placeholder="e.g., 001"
+                      helperText="Optional if member is selected"
                     />
-                    <p className="mt-1 text-xs text-gray-500">
-                      Enter either Member or Envelope Number
-                    </p>
                   </div>
 
                   <div>
-                    <label htmlFor={`amount-${index}`} className="block text-sm font-medium text-gray-700">
-                      Amount *
-                    </label>
-                    <div className="mt-1 relative rounded-md shadow-sm">
-                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                        <span className="text-gray-500 sm:text-sm">{currency.symbol}</span>
-                      </div>
-                      <input
-                        type="number"
-                        id={`amount-${index}`}
-                        value={entry.amount || ''}
-                        onChange={(e) => handleInputChange(index, 'amount', e.target.value)}
-                        required
-                        min="0"
-                        step="0.01"
-                        className="mt-1 block w-full pl-7 rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
-                      />
-                    </div>
+                    <Input
+                      type="number"
+                      value={entry.amount || ''}
+                      onChange={(e) => handleInputChange(index, 'amount', e.target.value)}
+                      icon={<DollarSign className="h-4 w-4" />}
+                      placeholder="Amount"
+                      min={0}
+                      step="0.01"
+                    />
                   </div>
 
                   <div>
-                    <label htmlFor={`category-${index}`} className="block text-sm font-medium text-gray-700">
-                      Category *
-                    </label>
-                    <select
-                      id={`category-${index}`}
-                      value={entry.category}
-                      onChange={(e) => handleInputChange(index, 'category', e.target.value)}
-                      required
-                      className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
-                    >
-                      <option value="tithe">Tithe</option>
-                      <option value="first_fruit_offering">First Fruit Offering</option>
-                      <option value="love_offering">Love Offering</option>
-                      <option value="mission_offering">Mission Offering</option>
-                      <option value="mission_pledge">Mission Pledge</option>
-                      <option value="building_offering">Building Offering</option>
-                      <option value="lot_offering">Lot Offering</option>
-                      <option value="other">Other</option>
-                    </select>
+                    <Combobox
+                      options={categoryOptions}
+                      value={entry.category_id}
+                      onChange={(value) => handleInputChange(index, 'category_id', value)}
+                      placeholder="Select Category"
+                    />
                   </div>
 
                   <div>
-                    <label htmlFor={`date-${index}`} className="block text-sm font-medium text-gray-700">
-                      Date *
-                    </label>
-                    <input
-                      type="date"
-                      id={`date-${index}`}
-                      value={entry.date}
-                      onChange={(e) => handleInputChange(index, 'date', e.target.value)}
-                      required
-                      className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
+                    <DatePickerInput
+                      value={entry.date ? new Date(entry.date) : undefined}
+                      onChange={(date) => handleInputChange(
+                        index,
+                        'date',
+                        date?.toISOString().split('T')[0] || ''
+                      )}
                     />
                   </div>
 
                   <div className="sm:col-span-2 lg:col-span-3">
-                    <label htmlFor={`description-${index}`} className="block text-sm font-medium text-gray-700">
-                      Description
-                    </label>
-                    <input
-                      type="text"
-                      id={`description-${index}`}
+                    <Input
+                      placeholder="Description"
                       value={entry.description}
                       onChange={(e) => handleInputChange(index, 'description', e.target.value)}
-                      className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
-                      placeholder="Enter description..."
                     />
                   </div>
                 </div>
               </div>
             ))}
 
-            <div className="mt-6 flex justify-between">
-              <button
+            <div className="flex justify-between">
+              <Button
                 type="button"
+                variant="outline"
                 onClick={handleAddRow}
-                className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+                className="flex items-center"
               >
                 <Plus className="h-4 w-4 mr-2" />
                 Add Another Entry
-              </button>
+              </Button>
 
               <div className="flex space-x-3">
-                <button
+                <Button
                   type="button"
+                  variant="outline"
                   onClick={() => navigate('/finances')}
-                  className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
                 >
                   Cancel
-                </button>
-                <button
+                </Button>
+                <Button
                   type="submit"
                   disabled={addBulkEntriesMutation.isPending}
-                  className="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
                 >
                   {addBulkEntriesMutation.isPending ? (
                     <>
-                      <Loader2 className="animate-spin -ml-1 mr-2 h-5 w-5" />
+                      <Loader2 className="animate-spin h-4 w-4 mr-2" />
                       Saving...
                     </>
                   ) : (
                     <>
-                      <Save className="-ml-1 mr-2 h-5 w-5" />
-                      Save All Entries
+                      <Save className="h-4 w-4 mr-2" />
+                      Save All
                     </>
                   )}
-                </button>
+                </Button>
               </div>
             </div>
           </div>
-        </div>
-      </form>
+        </form>
+      </Card>
     </div>
   );
 }

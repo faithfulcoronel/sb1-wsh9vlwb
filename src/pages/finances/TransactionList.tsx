@@ -2,25 +2,32 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '../../lib/supabase';
-import { format } from 'date-fns';
+import { format, startOfMonth, endOfMonth } from 'date-fns';
 import { useCurrencyStore } from '../../stores/currencyStore';
 import { formatCurrency } from '../../utils/currency';
-import { usePagination } from '../../hooks/usePagination';
-import Pagination from '../../components/Pagination';
+import { DataGrid } from '../../components/ui2/data-grid';
+import { Button } from '../../components/ui2/button';
+import { Badge } from '../../components/ui2/badge';
+import { Card, CardContent } from '../../components/ui2/card';
+import { SubscriptionGate } from '../../components/SubscriptionGate';
+import { TransactionFilters, TransactionFilter } from '../../components/filters/TransactionFilters';
 import {
-  ArrowLeft,
   Plus,
-  Search,
-  Filter,
+  ChevronLeft,
   TrendingUp,
   TrendingDown,
   Loader2,
+  Calendar,
+  DollarSign,
+  Users,
+  PiggyBank,
+  Tag,
 } from 'lucide-react';
 
 type Transaction = {
   id: string;
   type: 'income' | 'expense';
-  category: string;
+  category_id: string;
   amount: number;
   description: string;
   date: string;
@@ -31,17 +38,42 @@ type Transaction = {
   budget?: {
     name: string;
   };
+  category?: {
+    name: string;
+  };
 };
 
 function TransactionList() {
   const navigate = useNavigate();
   const { currency } = useCurrencyStore();
-  const [searchTerm, setSearchTerm] = useState('');
-  const [typeFilter, setTypeFilter] = useState<string>('all');
-  const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  const [filters, setFilters] = useState<TransactionFilter>({
+    searchTerm: '',
+    typeFilter: 'all',
+    categoryFilter: 'all',
+    dateRange: {
+      start: format(startOfMonth(new Date()), 'yyyy-MM-dd'),
+      end: format(endOfMonth(new Date()), 'yyyy-MM-dd'),
+    },
+    amountRange: {
+      min: '',
+      max: '',
+    },
+    entityFilter: '',
+  });
 
+  // Get current tenant
+  const { data: currentTenant } = useQuery({
+    queryKey: ['current-tenant'],
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc('get_current_tenant');
+      if (error) throw error;
+      return data?.[0];
+    },
+  });
+
+  // Get transactions with category info
   const { data: transactions, isLoading } = useQuery({
-    queryKey: ['transactions'],
+    queryKey: ['transactions', currentTenant?.id, filters.dateRange],
     queryFn: async () => {
       const { data, error } = await supabase
         .from('financial_transactions')
@@ -53,261 +85,302 @@ function TransactionList() {
           ),
           budget:budget_id (
             name
+          ),
+          category:category_id (
+            name
           )
         `)
+        .eq('tenant_id', currentTenant?.id)
+        .gte('date', filters.dateRange.start)
+        .lte('date', filters.dateRange.end)
         .order('date', { ascending: false });
 
       if (error) throw error;
       return data as Transaction[];
     },
+    enabled: !!currentTenant?.id,
   });
 
-  const filteredTransactions = transactions?.filter((transaction) => {
-    const matchesSearch = 
-      transaction.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      transaction.category.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (transaction.member && 
-        `${transaction.member.first_name} ${transaction.member.last_name}`
-          .toLowerCase()
-          .includes(searchTerm.toLowerCase())) ||
-      (transaction.budget?.name &&
-        transaction.budget.name.toLowerCase().includes(searchTerm.toLowerCase()));
-    
-    const matchesType = typeFilter === 'all' || transaction.type === typeFilter;
-    const matchesCategory = categoryFilter === 'all' || transaction.category === categoryFilter;
-    
-    return matchesSearch && matchesType && matchesCategory;
+  // Get categories
+  const { data: categories } = useQuery({
+    queryKey: ['categories', currentTenant?.id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('categories')
+        .select('*')
+        .eq('tenant_id', currentTenant?.id)
+        .eq('is_active', true)
+        .in('type', ['income_transaction', 'expense_transaction'])
+        .is('deleted_at', null)
+        .order('sort_order');
+
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!currentTenant?.id,
   });
 
-  const { 
-    currentPage,
-    itemsPerPage,
-    totalPages,
-    startIndex,
-    endIndex,
-    handlePageChange,
-    handleItemsPerPageChange,
-  } = usePagination({
-    totalItems: filteredTransactions?.length || 0,
-  });
+  const activeFilters = [
+    filters.typeFilter !== 'all' && {
+      id: 'type',
+      label: filters.typeFilter === 'income' ? 'Income' : 'Expense',
+      icon: filters.typeFilter === 'income' ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />,
+      onRemove: () => handleFilterChange({ typeFilter: 'all' }),
+    },
+    filters.categoryFilter !== 'all' && {
+      id: 'category',
+      label: categories?.find(c => c.id === filters.categoryFilter)?.name || 'Unknown Category',
+      icon: <Tag className="h-4 w-4" />,
+      onRemove: () => handleFilterChange({ categoryFilter: 'all' }),
+    },
+    (filters.amountRange.min || filters.amountRange.max) && {
+      id: 'amount',
+      label: `${filters.amountRange.min ? `Min: ${formatCurrency(parseFloat(filters.amountRange.min), currency)}` : ''} ${
+        filters.amountRange.max ? `Max: ${formatCurrency(parseFloat(filters.amountRange.max), currency)}` : ''
+      }`.trim(),
+      icon: <DollarSign className="h-4 w-4" />,
+      onRemove: () => handleFilterChange({ amountRange: { min: '', max: '' } }),
+    },
+    filters.entityFilter && {
+      id: 'entity',
+      label: `Entity: ${filters.entityFilter}`,
+      icon: <Users className="h-4 w-4" />,
+      onRemove: () => handleFilterChange({ entityFilter: '' }),
+    },
+  ].filter(Boolean);
 
-  const paginatedTransactions = filteredTransactions?.slice(startIndex, endIndex);
-
-  const categories = Array.from(
-    new Set(transactions?.map((t) => t.category) || [])
-  ).sort();
-
-  const formatStatus = (status: string) => {
-    return status.split('_').map(word => 
-      word.charAt(0).toUpperCase() + word.slice(1)
-    ).join(' ');
+  const handleFilterChange = (newFilters: Partial<TransactionFilter>) => {
+    setFilters(prev => ({ ...prev, ...newFilters }));
   };
+
+  const resetFilters = () => {
+    setFilters({
+      searchTerm: '',
+      typeFilter: 'all',
+      categoryFilter: 'all',
+      dateRange: {
+        start: format(startOfMonth(new Date()), 'yyyy-MM-dd'),
+        end: format(endOfMonth(new Date()), 'yyyy-MM-dd'),
+      },
+      amountRange: {
+        min: '',
+        max: '',
+      },
+      entityFilter: '',
+    });
+  };
+
+  // Filter and calculate totals
+  const { filteredData, totals } = React.useMemo(() => {
+    const filtered = (transactions || []).filter((transaction) => {
+      const matchesSearch = 
+        transaction.description.toLowerCase().includes(filters.searchTerm.toLowerCase()) ||
+        transaction.category?.name?.toLowerCase().includes(filters.searchTerm.toLowerCase()) ||
+        (transaction.member && 
+          `${transaction.member.first_name} ${transaction.member.last_name}`
+            .toLowerCase()
+            .includes(filters.searchTerm.toLowerCase())) ||
+        (transaction.budget?.name &&
+          transaction.budget.name.toLowerCase().includes(filters.searchTerm.toLowerCase()));
+      
+      const matchesType = filters.typeFilter === 'all' || transaction.type === filters.typeFilter;
+      const matchesCategory = filters.categoryFilter === 'all' || transaction.category_id === filters.categoryFilter;
+      
+      const matchesAmount = 
+        (!filters.amountRange.min || transaction.amount >= parseFloat(filters.amountRange.min)) &&
+        (!filters.amountRange.max || transaction.amount <= parseFloat(filters.amountRange.max));
+
+      const matchesEntity = !filters.entityFilter || (
+        (transaction.member && 
+          `${transaction.member.first_name} ${transaction.member.last_name}`
+            .toLowerCase()
+            .includes(filters.entityFilter.toLowerCase())) ||
+        (transaction.budget?.name &&
+          transaction.budget.name.toLowerCase().includes(filters.entityFilter.toLowerCase()))
+      );
+      
+      return matchesSearch && matchesType && matchesCategory && matchesAmount && matchesEntity;
+    });
+
+    // Calculate totals
+    const totalIncome = filtered.reduce((sum, t) => 
+      t.type === 'income' ? sum + t.amount : sum, 0
+    );
+    const totalExpenses = filtered.reduce((sum, t) => 
+      t.type === 'expense' ? sum + t.amount : sum, 0
+    );
+
+    return {
+      filteredData: filtered,
+      totals: {
+        income: totalIncome,
+        expenses: totalExpenses,
+        balance: totalIncome - totalExpenses
+      }
+    };
+  }, [transactions, filters]);
+
+  const columns = [
+    {
+      accessorKey: 'date',
+      header: 'Date',
+      cell: ({ row }) => format(new Date(row.original.date), 'MMM d, yyyy'),
+    },
+    {
+      accessorKey: 'type',
+      header: 'Type',
+      cell: ({ row }) => (
+        <Badge
+          variant={row.original.type === 'income' ? 'success' : 'destructive'}
+          className="flex items-center space-x-1"
+        >
+          {row.original.type === 'income' ? (
+            <TrendingUp className="h-4 w-4 mr-1" />
+          ) : (
+            <TrendingDown className="h-4 w-4 mr-1" />
+          )}
+          <span>{row.original.type}</span>
+        </Badge>
+      ),
+    },
+    {
+      accessorKey: 'category.name',
+      header: 'Category',
+    },
+    {
+      accessorKey: 'description',
+      header: 'Description',
+    },
+    {
+      id: 'entity',
+      header: 'Member/Budget',
+      cell: ({ row }) => {
+        const transaction = row.original;
+        return (
+          <div className="flex items-center">
+            {transaction.type === 'income' ? (
+              transaction.member && (
+                <>
+                  <Users className="h-4 w-4 text-muted-foreground mr-1" />
+                  {transaction.member.first_name} {transaction.member.last_name}
+                </>
+              )
+            ) : (
+              transaction.budget?.name && (
+                <>
+                  <PiggyBank className="h-4 w-4 text-muted-foreground mr-1" />
+                  {transaction.budget.name}
+                </>
+              )
+            )}
+          </div>
+        );
+      },
+    },
+    {
+      accessorKey: 'amount',
+      header: 'Amount',
+      cell: ({ row }) => (
+        <div className="text-right font-medium">
+          <span
+            className={
+              row.original.type === 'income'
+                ? 'text-success'
+                : 'text-destructive'
+            }
+          >
+            {formatCurrency(row.original.amount, currency)}
+          </span>
+        </div>
+      ),
+      footer: () => (
+        <div className="text-right font-medium">
+          <div className="text-success">
+            +{formatCurrency(totals.income, currency)}
+          </div>
+          <div className="text-destructive">
+            -{formatCurrency(totals.expenses, currency)}
+          </div>
+          <div className={totals.balance >= 0 ? 'text-success' : 'text-destructive'}>
+            {formatCurrency(Math.abs(totals.balance), currency)}
+            {totals.balance >= 0 ? ' (Net Income)' : ' (Net Loss)'}
+          </div>
+        </div>
+      ),
+    },
+  ];
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       <div className="mb-6">
-        <button
+        <Button
+          variant="ghost"
           onClick={() => navigate('/finances')}
-          className="flex items-center text-gray-600 hover:text-gray-900"
+          className="flex items-center"
         >
-          <ArrowLeft className="h-5 w-5 mr-2" />
+          <ChevronLeft className="h-5 w-5 mr-2" />
           Back to Finances
-        </button>
+        </Button>
       </div>
 
       <div className="sm:flex sm:items-center">
         <div className="sm:flex-auto">
-          <h1 className="text-2xl font-semibold text-gray-900">Transactions</h1>
-          <p className="mt-2 text-sm text-gray-700">
+          <h1 className="text-2xl font-semibold text-foreground">Transactions</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
             A list of all financial transactions including income and expenses.
           </p>
         </div>
         <div className="mt-4 sm:mt-0 sm:ml-16 sm:flex-none">
-          <Link
-            to="/finances/transactions/add"
-            className="inline-flex items-center justify-center rounded-md border border-transparent bg-primary-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 sm:w-auto"
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            Add Transaction
-          </Link>
+          <SubscriptionGate type="transaction">
+            <Button
+              variant="default"
+              onClick={() => navigate('/finances/transactions/add')}
+              className="flex items-center"
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              Add Transaction
+            </Button>
+          </SubscriptionGate>
         </div>
       </div>
 
-      <div className="mt-6 sm:flex sm:items-center sm:justify-between">
-        <div className="relative max-w-xs">
-          <div className="pointer-events-none absolute inset-y-0 left-0 pl-3 flex items-center">
-            <Search className="h-5 w-5 text-gray-400" />
-          </div>
-          <input
-            type="text"
-            className="block w-full rounded-md border border-gray-300 pl-10 pr-3 py-2 text-sm placeholder-gray-500 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
-            placeholder="Search transactions..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
-        </div>
+      {/* Filters */}
+      <TransactionFilters
+        filters={filters}
+        onFilterChange={handleFilterChange}
+        onResetFilters={resetFilters}
+        activeFilters={activeFilters}
+      />
 
-        <div className="mt-4 sm:mt-0 sm:flex sm:space-x-4">
-          <div className="relative">
-            <div className="pointer-events-none absolute inset-y-0 left-0 pl-3 flex items-center">
-              <Filter className="h-5 w-5 text-gray-400" />
+      {/* Transaction List */}
+      <div className="mt-6">
+        <DataGrid
+          columns={columns}
+          data={filteredData}
+          loading={isLoading}
+          toolbar={
+            <div className="flex items-center space-x-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => navigate('/finances/transactions/bulk')}
+              >
+                Bulk Entry
+              </Button>
             </div>
-            <select
-              className="block w-full rounded-md border border-gray-300 pl-10 pr-10 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
-              value={typeFilter}
-              onChange={(e) => setTypeFilter(e.target.value)}
-            >
-              <option value="all">All Types</option>
-              <option value="income">Income</option>
-              <option value="expense">Expense</option>
-            </select>
-          </div>
-
-          <div className="relative mt-4 sm:mt-0">
-            <div className="pointer-events-none absolute inset-y-0 left-0 pl-3 flex items-center">
-              <Filter className="h-5 w-5 text-gray-400" />
-            </div>
-            <select
-              className="block w-full rounded-md border border-gray-300 pl-10 pr-10 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
-              value={categoryFilter}
-              onChange={(e) => setCategoryFilter(e.target.value)}
-            >
-              <option value="all">All Categories</option>
-              {categories.map((category) => (
-                <option key={category} value={category}>
-                  {formatStatus(category)}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
+          }
+          pagination={{
+            pageSize: 10,
+            pageSizeOptions: [5, 10, 20, 50, 100],
+          }}
+          exportOptions={{
+            enabled: true,
+            fileName: 'transactions',
+            pdf: true,
+            excel: true,
+          }}
+        />
       </div>
-
-      {isLoading ? (
-        <div className="flex justify-center py-8">
-          <Loader2 className="h-8 w-8 animate-spin text-primary-600" />
-        </div>
-      ) : paginatedTransactions && paginatedTransactions.length > 0 ? (
-        <>
-          <div className="mt-8 flex flex-col">
-            <div className="-mx-4 -my-2 overflow-x-auto sm:-mx-6 lg:-mx-8">
-              <div className="inline-block min-w-full py-2 align-middle md:px-6 lg:px-8">
-                <div className="overflow-hidden shadow ring-1 ring-black ring-opacity-5 md:rounded-lg">
-                  <table className="min-w-full divide-y divide-gray-300">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th
-                          scope="col"
-                          className="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 sm:pl-6"
-                        >
-                          Date
-                        </th>
-                        <th
-                          scope="col"
-                          className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900"
-                        >
-                          Type
-                        </th>
-                        <th
-                          scope="col"
-                          className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900"
-                        >
-                          Category
-                        </th>
-                        <th
-                          scope="col"
-                          className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900"
-                        >
-                          Description
-                        </th>
-                        <th
-                          scope="col"
-                          className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900"
-                        >
-                          Member/Budget
-                        </th>
-                        <th
-                          scope="col"
-                          className="px-3 py-3.5 text-right text-sm font-semibold text-gray-900"
-                        >
-                          Amount
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-200 bg-white">
-                      {paginatedTransactions.map((transaction) => (
-                        <tr key={transaction.id}>
-                          <td className="whitespace-nowrap py-4 pl-4 pr-3 text-sm text-gray-900 sm:pl-6">
-                            {format(new Date(transaction.date), 'MMM d, yyyy')}
-                          </td>
-                          <td className="whitespace-nowrap px-3 py-4 text-sm">
-                            <span
-                              className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                                transaction.type === 'income'
-                                  ? 'bg-green-100 text-green-800'
-                                  : 'bg-red-100 text-red-800'
-                              }`}
-                            >
-                              {transaction.type === 'income' ? (
-                                <TrendingUp className="mr-1 h-4 w-4" />
-                              ) : (
-                                <TrendingDown className="mr-1 h-4 w-4" />
-                              )}
-                              {transaction.type}
-                            </span>
-                          </td>
-                          <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-900">
-                            {formatStatus(transaction.category)}
-                          </td>
-                          <td className="px-3 py-4 text-sm text-gray-900">
-                            {transaction.description}
-                          </td>
-                          <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-900">
-                            {transaction.type === 'income' && transaction.member
-                              ? `${transaction.member.first_name} ${transaction.member.last_name}`
-                              : transaction.budget?.name || '-'}
-                          </td>
-                          <td className="whitespace-nowrap px-3 py-4 text-sm text-right font-medium">
-                            <span
-                              className={
-                                transaction.type === 'income'
-                                  ? 'text-green-600'
-                                  : 'text-red-600'
-                              }
-                            >
-                              {formatCurrency(transaction.amount, currency)}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Pagination */}
-          <div className="mt-6">
-            <Pagination
-              currentPage={currentPage}
-              totalPages={totalPages}
-              onPageChange={handlePageChange}
-              itemsPerPage={itemsPerPage}
-              totalItems={filteredTransactions?.length || 0}
-              onItemsPerPageChange={handleItemsPerPageChange}
-            />
-          </div>
-        </>
-      ) : (
-        <div className="text-center py-8 bg-white shadow sm:rounded-lg mt-8">
-          <p className="text-sm text-gray-500">
-            {searchTerm || typeFilter !== 'all' || categoryFilter !== 'all'
-              ? 'No transactions found matching your search criteria'
-              : 'No transactions found. Add your first transaction by clicking the "Add Transaction" button above.'}
-          </p>
-        </div>
-      )}
     </div>
   );
 }

@@ -1,13 +1,27 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
-import { LogIn } from 'lucide-react';
+import { Card, CardHeader, CardContent } from '../../components/ui2/card';
+import { Input } from '../../components/ui2/input';
+import { Button } from '../../components/ui2/button';
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogAction,
+  AlertDialogCancel,
+} from '../../components/ui2/alert-dialog';
+import { Building2, LogIn, Loader2, Mail, Lock } from 'lucide-react';
 
 function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resetMode, setResetMode] = useState(false);
+  const [resetSuccess, setResetSuccess] = useState(false);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -28,85 +42,175 @@ function Login() {
     }
   };
 
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/auth/reset-password`,
+      });
+
+      if (error) throw error;
+      setResetSuccess(true);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'An error occurred');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-md w-full space-y-8">
-        <div>
-          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
-            Sign in to your account
-          </h2>
-        </div>
-        <form className="mt-8 space-y-6" onSubmit={handleLogin}>
-          <div className="rounded-md shadow-sm -space-y-px">
-            <div>
-              <label htmlFor="email-address" className="sr-only">
-                Email address
-              </label>
-              <input
-                id="email-address"
-                name="email"
-                type="email"
-                autoComplete="email"
-                required
-                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-t-md focus:outline-none focus:ring-primary-500 focus:border-primary-500 focus:z-10 sm:text-sm"
-                placeholder="Email address"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-            </div>
-            <div>
-              <label htmlFor="password" className="sr-only">
-                Password
-              </label>
-              <input
-                id="password"
-                name="password"
-                type="password"
-                autoComplete="current-password"
-                required
-                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-none focus:ring-primary-500 focus:border-primary-500 focus:z-10 sm:text-sm"
-                placeholder="Password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-            </div>
-          </div>
+    <div className="min-h-screen flex">
+      {/* Left side - Login Form */}
+      <div className="flex-1 flex items-center justify-center px-4 sm:px-6 lg:px-8">
+        <Card className="w-full max-w-md mx-auto">
+          <CardHeader className="text-center space-y-2">
+            <h2 className="text-3xl font-bold">
+              {resetMode ? 'Reset your password' : 'Sign in to your account'}
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              {resetMode ? (
+                'Enter your email to receive reset instructions'
+              ) : (
+                <>
+                  Or{' '}
+                  <Link
+                    to="/register"
+                    className="font-medium text-primary hover:text-primary/90"
+                  >
+                    register your church
+                  </Link>
+                </>
+              )}
+            </p>
+          </CardHeader>
 
-          {error && (
-            <div className="rounded-md bg-red-50 p-4">
-              <div className="flex">
-                <div className="ml-3">
-                  <h3 className="text-sm font-medium text-red-800">{error}</h3>
-                </div>
+          <CardContent>
+            <form onSubmit={resetMode ? handleResetPassword : handleLogin} className="space-y-4">
+              <div className="space-y-4">
+                <Input
+                  id="email-address"
+                  name="email"
+                  type="email"
+                  label="Email"
+                  autoComplete="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="email@email.com"
+                  icon={<Mail className="h-5 w-5" />}
+                />
+
+                {!resetMode && (
+                  <Input
+                    id="password"
+                    name="password"
+                    type="password"
+                    label="Password"
+                    autoComplete="current-password"
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Enter Password"
+                    icon={<Lock className="h-5 w-5" />}
+                    showPasswordToggle
+                  />
+                )}
               </div>
-            </div>
-          )}
 
-          <div>
-            <button
-              type="submit"
-              disabled={loading}
-              className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
-            >
-              <span className="absolute left-0 inset-y-0 flex items-center pl-3">
-                <LogIn className="h-5 w-5 text-primary-500 group-hover:text-primary-400" />
-              </span>
-              {loading ? 'Signing in...' : 'Sign in'}
-            </button>
-          </div>
+              <div className="flex items-center justify-between">
+                <Button
+                  type="button"
+                  variant="link"
+                  onClick={() => {
+                    setResetMode(!resetMode);
+                    setError(null);
+                    setResetSuccess(false);
+                  }}
+                  className="px-0"
+                >
+                  {resetMode ? 'Back to sign in' : 'Forgot your password?'}
+                </Button>
+              </div>
 
-          <div className="flex items-center justify-between">
-            <div className="text-sm">
-              <Link
-                to="/register"
-                className="font-medium text-primary-600 hover:text-primary-500"
+              <Button
+                type="submit"
+                className="w-full"
+                disabled={loading}
               >
-                Don't have an account? Sign up
-              </Link>
-            </div>
-          </div>
-        </form>
+                {loading ? (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                ) : resetMode ? (
+                  <>
+                    <Mail className="h-5 w-5 mr-2" />
+                    Send Reset Instructions
+                  </>
+                ) : (
+                  <>
+                    Sign In
+                  </>
+                )}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
       </div>
+
+            {/* Right side - Background Image */}
+      <div className="hidden lg:block relative w-0 flex-1">
+        <img
+          className="absolute inset-0 h-full w-full object-cover"
+          src="/landing_bg.svg"
+          alt="Church interior"
+        />
+        <div className="absolute inset-0 bg-primary-900 bg-opacity-50 backdrop-blur-sm"></div>
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="max-w-2xl mx-auto text-left text-white">
+            <img className="h-12" src="/logo_long.svg" alt="Logo" />
+            <br />
+            <h1 className="text-7xl font-bold mb-4">Making church</h1>
+            <h1 className="text-7xl font-bold mb-4">management</h1>
+            <h1 className="text-7xl font-bold mb-4">much easier.</h1>
+          </div>
+        </div>
+      </div>
+
+
+      {/* Error Dialog */}
+      <AlertDialog open={!!error} onOpenChange={() => setError(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle variant="danger">
+              Authentication Error
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {error}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogAction onClick={() => setError(null)}>
+            Try Again
+          </AlertDialogAction>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Success Dialog */}
+      <AlertDialog open={resetSuccess} onOpenChange={() => setResetSuccess(false)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle variant="success">
+              Password Reset Email Sent
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Please check your email for password reset instructions.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogAction onClick={() => setResetSuccess(false)}>
+            Close
+          </AlertDialogAction>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

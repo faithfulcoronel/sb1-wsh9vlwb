@@ -4,17 +4,24 @@ import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import { supabase } from '../../lib/supabase';
 import { useCurrencyStore } from '../../stores/currencyStore';
 import { formatCurrency } from '../../utils/currency';
+import { Card, CardHeader, CardContent } from '../../components/ui2/card';
+import { Input } from '../../components/ui2/input';
+import { Button } from '../../components/ui2/button';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../../components/ui2/select';
+import { DatePickerInput } from '../../components/ui2/date-picker';
+import { Combobox } from '../../components/ui2/combobox';
 import {
   ArrowLeft,
   Save,
   Loader2,
-  AlertCircle,
+  DollarSign,
+  TrendingUp,
+  TrendingDown,
 } from 'lucide-react';
 
 type Transaction = {
-  id: string;
   type: 'income' | 'expense';
-  category: string;
+  category_id: string;
   amount: number;
   description: string;
   date: string;
@@ -22,60 +29,113 @@ type Transaction = {
   member_id?: string;
 };
 
-type Budget = {
-  id: string;
-  name: string;
-  category: string;
-};
-
-type Member = {
-  id: string;
-  first_name: string;
-  last_name: string;
-};
-
 function TransactionAdd() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { currency } = useCurrencyStore();
   const [error, setError] = useState<string | null>(null);
-  const [formData, setFormData] = useState<Partial<Transaction>>({
+  const [formData, setFormData] = useState<Transaction>({
     type: 'income',
+    category_id: '',
+    amount: 0,
+    description: '',
     date: new Date().toISOString().split('T')[0],
   });
 
-  const { data: budgets } = useQuery({
-    queryKey: ['budgets'],
+  // Get current tenant
+  const { data: currentTenant } = useQuery({
+    queryKey: ['current-tenant'],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from('budgets')
-        .select('id, name, category')
-        .order('name');
-
+      const { data, error } = await supabase.rpc('get_current_tenant');
       if (error) throw error;
-      return data as Budget[];
+      return data?.[0];
     },
   });
 
+  // Get budgets
+  const { data: budgets } = useQuery({
+    queryKey: ['budgets', currentTenant?.id],
+    queryFn: async () => {
+      const today = new Date().toISOString();
+      
+      // Get active budgets
+      const { data: budgets, error: budgetsError } = await supabase
+        .from('budgets')
+        .select('*')
+        .eq('tenant_id', currentTenant?.id)
+        .lte('start_date', today)
+        .gte('end_date', today);
+
+      if (budgetsError) throw budgetsError;
+
+      // Get used amounts for each budget
+      const budgetsWithUsage = await Promise.all(
+        (budgets || []).map(async (budget) => {
+          const { data: transactions, error: transactionsError } = await supabase
+            .from('financial_transactions')
+            .select('amount')
+            .eq('budget_id', budget.id)
+            .eq('type', 'expense');
+
+          if (transactionsError) throw transactionsError;
+
+          const used_amount = transactions?.reduce((sum, t) => sum + Number(t.amount), 0) || 0;
+
+          return {
+            ...budget,
+            used_amount,
+          };
+        })
+      );
+
+      return budgetsWithUsage;
+    },
+    enabled: !!currentTenant?.id,
+  });
+
+  // Get members
   const { data: members } = useQuery({
-    queryKey: ['members'],
+    queryKey: ['members', currentTenant?.id],
     queryFn: async () => {
       const { data, error } = await supabase
         .from('members')
         .select('id, first_name, last_name')
+        .eq('tenant_id', currentTenant?.id)
+        .is('deleted_at', null)
         .order('last_name');
 
       if (error) throw error;
-      return data as Member[];
+      return data;
     },
+    enabled: !!currentTenant?.id,
+  });
+
+  // Get categories based on transaction type
+  const { data: categories } = useQuery({
+    queryKey: ['categories', formData.type, currentTenant?.id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('categories')
+        .select('*')
+        .eq('tenant_id', currentTenant?.id)
+        .eq('is_active', true)
+        .eq('type', `${formData.type}_transaction`)
+        .is('deleted_at', null)
+        .order('sort_order');
+
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!currentTenant?.id,
   });
 
   const addTransactionMutation = useMutation({
-    mutationFn: async (data: Partial<Transaction>) => {
+    mutationFn: async (data: Transaction) => {
       const { data: newTransaction, error } = await supabase
         .from('financial_transactions')
         .insert([{
           ...data,
+          tenant_id: currentTenant?.id,
           created_by: (await supabase.auth.getUser()).data.user?.id,
         }])
         .select()
@@ -97,13 +157,18 @@ function TransactionAdd() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!formData.type || !formData.category || !formData.amount || !formData.description || !formData.date) {
+    if (!formData.category_id || !formData.amount || !formData.description || !formData.date) {
       setError('Please fill in all required fields');
       return;
     }
 
     if (formData.type === 'income' && !formData.member_id) {
       setError('Please select a member for income transactions');
+      return;
+    }
+
+    if (formData.type === 'expense' && !formData.budget_id) {
+      setError('Please select a budget for expense transactions');
       return;
     }
 
@@ -115,242 +180,205 @@ function TransactionAdd() {
   };
 
   const handleInputChange = (
-    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
+    field: keyof Transaction,
+    value: string | number
   ) => {
-    const { name, value } = e.target;
-    setFormData((prev) => ({
-      ...prev,
-      [name]: name === 'amount' ? parseFloat(value) : value,
-    }));
+    setFormData(prev => {
+      const newData = {
+        ...prev,
+        [field]: value,
+      };
+
+      // Clear category when changing type
+      if (field === 'type') {
+        newData.category_id = '';
+      }
+
+      // Clear member/budget when changing type
+      if (field === 'type') {
+        if (value === 'income') {
+          delete newData.budget_id;
+        } else {
+          delete newData.member_id;
+        }
+      }
+
+      return newData;
+    });
   };
 
-  const formatStatus = (status: string) => {
-    return status.split('_').map(word => 
-      word.charAt(0).toUpperCase() + word.slice(1)
-    ).join(' ');
-  };
+  const budgetOptions = React.useMemo(() => 
+    budgets?.map(b => ({
+      value: b.id,
+      label: `${b.name} (${formatCurrency(b.amount - (b.used_amount || 0), currency)} remaining)`
+    })) || [], 
+    [budgets, currency]
+  );
+
+  const memberOptions = React.useMemo(() => 
+    members?.map(m => ({
+      value: m.id,
+      label: `${m.first_name} ${m.last_name}`
+    })) || [], 
+    [members]
+  );
+
+  const categoryOptions = React.useMemo(() => 
+    categories?.map(c => ({
+      value: c.id,
+      label: c.name
+    })) || [],
+    [categories]
+  );
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       <div className="mb-6">
-        <button
+        <Button
+          variant="ghost"
           onClick={() => navigate('/finances')}
-          className="flex items-center text-gray-600 hover:text-gray-900"
+          className="flex items-center"
         >
           <ArrowLeft className="h-5 w-5 mr-2" />
           Back to Finances
-        </button>
+        </Button>
       </div>
 
-      <div className="bg-white shadow overflow-hidden sm:rounded-lg">
-        <div className="px-4 py-5 sm:px-6">
-          <h3 className="text-lg leading-6 font-medium text-gray-900">
-            Add New Transaction
-          </h3>
-          <p className="mt-1 text-sm text-gray-500">
-            Record a new financial transaction.
+      <Card>
+        <CardHeader>
+          <h3 className="text-lg font-medium text-foreground">Add New Transaction</h3>
+          <p className="text-sm text-muted-foreground">
+            Record a new financial transaction
           </p>
-        </div>
+        </CardHeader>
 
-        <form onSubmit={handleSubmit} className="border-t border-gray-200">
-          <div className="px-4 py-5 sm:px-6">
-            <div className="grid grid-cols-1 gap-y-6 gap-x-4 sm:grid-cols-2">
+        <CardContent>
+          <form onSubmit={handleSubmit} className="space-y-6">
+            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
               <div>
-                <label htmlFor="type" className="block text-sm font-medium text-gray-700">
-                  Transaction Type *
-                </label>
-                <select
-                  name="type"
-                  id="type"
-                  required
-                  value={formData.type || 'income'}
-                  onChange={handleInputChange}
-                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
+                <Select
+                  value={formData.type}
+                  onValueChange={(value) => handleInputChange('type', value)}
                 >
-                  <option value="income">Income</option>
-                  <option value="expense">Expense</option>
-                </select>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select Type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="income">
+                      <div className="flex items-center">
+                        <TrendingUp className="h-4 w-4 mr-2 text-success" />
+                        Income
+                      </div>
+                    </SelectItem>
+                    <SelectItem value="expense">
+                      <div className="flex items-center">
+                        <TrendingDown className="h-4 w-4 mr-2 text-destructive" />
+                        Expense
+                      </div>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
 
               <div>
-                <label htmlFor="category" className="block text-sm font-medium text-gray-700">
-                  Category *
-                </label>
-                <select
-                  name="category"
-                  id="category"
-                  required
-                  value={formData.category || ''}
-                  onChange={handleInputChange}
-                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
-                >
-                  <option value="">Select a category</option>
-                  {formData.type === 'income' ? (
-                    <>
-                      <option value="tithe">Tithe</option>
-                      <option value="first_fruit_offering">First Fruit Offering</option>
-                      <option value="love_offering">Love Offering</option>
-                      <option value="mission_offering">Mission Offering</option>
-                      <option value="mission_pledge">Mission Pledge</option>
-                      <option value="building_offering">Building Offering</option>
-                      <option value="lot_offering">Lot Offering</option>
-                      <option value="other">Other</option>
-                    </>
-                  ) : (
-                    <>
-                      <option value="ministry_expense">Ministry Expense</option>
-                      <option value="payroll">Payroll</option>
-                      <option value="utilities">Utilities</option>
-                      <option value="maintenance">Maintenance</option>
-                      <option value="events">Events</option>
-                      <option value="missions">Missions</option>
-                      <option value="education">Education</option>
-                      <option value="other">Other</option>
-                    </>
-                  )}
-                </select>
-              </div>
-
-              <div>
-                <label htmlFor="amount" className="block text-sm font-medium text-gray-700">
-                  Amount *
-                </label>
-                <div className="mt-1 relative rounded-md shadow-sm">
-                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                    <span className="text-gray-500 sm:text-sm">{currency.symbol}</span>
-                  </div>
-                  <input
-                    type="number"
-                    name="amount"
-                    id="amount"
-                    required
-                    min="0"
-                    step="0.01"
-                    value={formData.amount || ''}
-                    onChange={handleInputChange}
-                    className="mt-1 block w-full pl-7 rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
-                    placeholder="0.00"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label htmlFor="date" className="block text-sm font-medium text-gray-700">
-                  Date *
-                </label>
-                <input
-                  type="date"
-                  name="date"
-                  id="date"
-                  required
-                  value={formData.date || ''}
-                  onChange={handleInputChange}
-                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
+                <Combobox
+                  options={categoryOptions}
+                  value={formData.category_id}
+                  onChange={(value) => handleInputChange('category_id', value)}
+                  placeholder="Select Category"
                 />
               </div>
 
-              {formData.type === 'expense' && (
-                <div>
-                  <label htmlFor="budget_id" className="block text-sm font-medium text-gray-700">
-                    Budget
-                  </label>
-                  <select
-                    name="budget_id"
-                    id="budget_id"
-                    value={formData.budget_id || ''}
-                    onChange={handleInputChange}
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
-                  >
-                    <option value="">Select a budget</option>
-                    {budgets?.map((budget) => (
-                      <option key={budget.id} value={budget.id}>
-                        {budget.name} ({formatStatus(budget.category)})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
+              <div>
+                <Input
+                  type="number"
+                  value={formData.amount || ''}
+                  onChange={(e) => handleInputChange('amount', e.target.value)}
+                  icon={<DollarSign className="h-4 w-4" />}
+                  placeholder="Amount"
+                  min={0}
+                  step="0.01"
+                />
+              </div>
 
-              {formData.type === 'income' && (
+              <div>
+                <DatePickerInput
+                  value={formData.date ? new Date(formData.date) : undefined}
+                  onChange={(date) => handleInputChange(
+                    'date',
+                    date?.toISOString().split('T')[0] || ''
+                  )}
+                  placeholder="Date"
+                />
+              </div>
+
+              {formData.type === 'expense' ? (
                 <div>
-                  <label htmlFor="member_id" className="block text-sm font-medium text-gray-700">
-                    Member *
-                  </label>
-                  <select
-                    name="member_id"
-                    id="member_id"
-                    required
-                    value={formData.member_id || ''}
-                    onChange={handleInputChange}
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
-                  >
-                    <option value="">Select a member</option>
-                    {members?.map((member) => (
-                      <option key={member.id} value={member.id}>
-                        {member.first_name} {member.last_name}
-                      </option>
-                    ))}
-                  </select>
+                  <Combobox
+                    options={budgetOptions}
+                    value={formData.budget_id}
+                    onChange={(value) => handleInputChange('budget_id', value)}
+                    placeholder="Select Budget"
+                  />
+                </div>
+              ) : (
+                <div>
+                  <Combobox
+                    options={memberOptions}
+                    value={formData.member_id}
+                    onChange={(value) => handleInputChange('member_id', value)}
+                    placeholder="Select Member"
+                  />
                 </div>
               )}
 
               <div className="sm:col-span-2">
-                <label htmlFor="description" className="block text-sm font-medium text-gray-700">
-                  Description *
-                </label>
-                <textarea
-                  name="description"
-                  id="description"
-                  required
-                  rows={3}
-                  value={formData.description || ''}
-                  onChange={handleInputChange}
-                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
-                  placeholder="Enter transaction details..."
+                <Input
+                  placeholder="Description"
+                  value={formData.description}
+                  onChange={(e) => handleInputChange('description', e.target.value)}
                 />
               </div>
             </div>
 
             {error && (
-              <div className="mt-4 rounded-md bg-red-50 p-4">
+              <div className="rounded-lg bg-destructive/15 p-4">
                 <div className="flex">
-                  <AlertCircle className="h-5 w-5 text-red-400" />
                   <div className="ml-3">
-                    <h3 className="text-sm font-medium text-red-800">{error}</h3>
+                    <h3 className="text-sm font-medium text-destructive">{error}</h3>
                   </div>
                 </div>
               </div>
             )}
 
-            <div className="mt-6 flex justify-end space-x-3">
-              <button
+            <div className="flex justify-end space-x-3">
+              <Button
                 type="button"
+                variant="outline"
                 onClick={() => navigate('/finances')}
-                className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button
                 type="submit"
                 disabled={addTransactionMutation.isPending}
-                className="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
               >
                 {addTransactionMutation.isPending ? (
                   <>
-                    <Loader2 className="animate-spin -ml-1 mr-2 h-5 w-5" />
-                    Adding...
+                    <Loader2 className="animate-spin h-4 w-4 mr-2" />
+                    Saving...
                   </>
                 ) : (
                   <>
-                    <Save className="-ml-1 mr-2 h-5 w-5" />
+                    <Save className="h-4 w-4 mr-2" />
                     Add Transaction
                   </>
                 )}
-              </button>
+              </Button>
             </div>
-          </div>
-        </form>
-      </div>
+          </form>
+        </CardContent>
+      </Card>
     </div>
   );
 }

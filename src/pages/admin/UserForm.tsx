@@ -1,7 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
-import Select from 'react-select';
 import { supabase } from '../../lib/supabase';
 import { useMessageStore } from '../../components/MessageHandler';
 import {
@@ -9,7 +8,6 @@ import {
   Save,
   Loader2,
   AlertCircle,
-  CheckCircle2,
   UserPlus,
 } from 'lucide-react';
 
@@ -17,22 +15,11 @@ type UserFormData = {
   email: string;
   password: string;
   roles: string[];
-  member_id?: string;
-};
-
-type Member = {
-  id: string;
   first_name: string;
   last_name: string;
-  email: string | null;
 };
 
-type SelectOption = {
-  value: string;
-  label: string;
-};
-
-function UserForm() {
+const UserForm = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -41,7 +28,18 @@ function UserForm() {
     email: '',
     password: '',
     roles: [],
-    member_id: undefined,
+    first_name: '',
+    last_name: '',
+  });
+
+  // Get current tenant
+  const { data: currentTenant } = useQuery({
+    queryKey: ['current-tenant'],
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc('get_current_tenant');
+      if (error) throw error;
+      return data?.[0];
+    },
   });
 
   // Fetch user data if editing
@@ -66,20 +64,9 @@ function UserForm() {
 
       if (rolesError) throw rolesError;
 
-      // Get associated member
-      const { data: members, error: memberError } = await supabase
-        .from('members')
-        .select('id, first_name, last_name, email')
-        .eq('email', data.email);
-
-      if (memberError) throw memberError;
-
-      const member = members?.[0];
-
       return {
         ...data,
-        roles: rolesData?.map(r => r.role_id) || [],
-        member_id: member?.id,
+        roles: rolesData?.map(r => r.role_name) || [],
       };
     },
     enabled: !!id,
@@ -99,79 +86,40 @@ function UserForm() {
     },
   });
 
-  // Fetch available members
-  const { data: availableMembers, isLoading: membersLoading } = useQuery({
-    queryKey: ['available-members', id],
-    queryFn: async () => {
-      const { data: members, error } = await supabase
-        .from('members')
-        .select('id, first_name, last_name, email')
-        .is('deleted_at', null)
-        .not('email', 'is', null)
-        .order('first_name');
-
-      if (error) throw error;
-
-      // Get all users
-      const { data: users } = await supabase.rpc('manage_user', {
-        operation: 'get'
-      });
-
-      // Create a set of emails that are already assigned to users
-      const userEmails = new Set((users as any[])?.map(u => u.email.toLowerCase()));
-      
-      // If editing, remove current user's email from the exclusion list
-      if (id && userData?.email) {
-        userEmails.delete(userData.email.toLowerCase());
-      }
-
-      // Filter out members that already have users
-      return members.filter(m => m.email && !userEmails.has(m.email.toLowerCase()));
-    },
-  });
-
-  React.useEffect(() => {
+  useEffect(() => {
     if (userData) {
       setFormData({
         email: userData.email,
         password: '',
         roles: userData.roles || [],
-        member_id: userData.member_id,
+        first_name: userData.raw_user_meta_data?.first_name || '',
+        last_name: userData.raw_user_meta_data?.last_name || '',
       });
     }
   }, [userData]);
 
   const createUserMutation = useMutation({
     mutationFn: async (data: UserFormData) => {
-      // Get member's email if member_id is provided
-      let email = data.email;
-      if (data.member_id) {
-        const { data: members, error: memberError } = await supabase
-          .from('members')
-          .select('email')
-          .eq('id', data.member_id);
-
-        if (memberError) throw memberError;
-        if (!members || members.length === 0) throw new Error('Selected member not found');
-        if (!members[0].email) throw new Error('Selected member has no email address');
-        email = members[0].email;
+      if (!currentTenant?.id) {
+        throw new Error('No tenant found');
       }
 
-      // Create user using the secure function
-      const { data: newUser, error: createError } = await supabase.rpc('manage_user', {
-        operation: 'create',
-        user_data: {
-          email,
-          password: data.password,
-          roles: data.roles,
-        }
+      // Create user with proper tenant and role assignment
+      const { data: newUser, error } = await supabase.rpc('handle_user_creation', {
+        p_email: data.email,
+        p_password: data.password,
+        p_tenant_id: currentTenant.id,
+        p_roles: data.roles,
+        p_first_name: data.first_name,
+        p_last_name: data.last_name,
+        p_admin_role: data.roles.includes('admin') ? 'tenant_admin' : 'member'
       });
 
-      if (createError) throw createError;
+      if (error) throw error;
       return newUser;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['users'] });
+      queryClient.invalidateQueries({ queryKey: ['tenant-users'] });
       addMessage({
         type: 'success',
         text: 'User created successfully',
@@ -192,8 +140,7 @@ function UserForm() {
     mutationFn: async (data: UserFormData) => {
       if (!id) return;
 
-      // Update user using the secure function
-      const { data: updatedUser, error: updateError } = await supabase.rpc('manage_user', {
+      const { error: updateError } = await supabase.rpc('manage_user', {
         operation: 'update',
         target_user_id: id,
         user_data: {
@@ -203,10 +150,9 @@ function UserForm() {
       });
 
       if (updateError) throw updateError;
-      return updatedUser;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['users'] });
+      queryClient.invalidateQueries({ queryKey: ['tenant-users'] });
       addMessage({
         type: 'success',
         text: 'User updated successfully',
@@ -226,10 +172,10 @@ function UserForm() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!id && !formData.email && !formData.member_id) {
+    if (!id && !formData.email) {
       addMessage({
         type: 'error',
-        text: 'Please provide either an email or select a member',
+        text: 'Email is required',
         duration: 5000,
       });
       return;
@@ -264,29 +210,12 @@ function UserForm() {
     }
   };
 
-  // Show loading state
-  if (userLoading || membersLoading) {
+  if (userLoading) {
     return (
       <div className="flex justify-center py-8">
         <Loader2 className="h-8 w-8 animate-spin text-primary-600" />
       </div>
     );
-  }
-
-  const memberOptions: SelectOption[] = availableMembers?.map(member => ({
-    value: member.id,
-    label: `${member.first_name} ${member.last_name} (${member.email})`,
-  })) || [];
-
-  // If editing, add the current member to the options if it exists
-  if (id && userData?.member_id) {
-    const currentMember = availableMembers?.find(m => m.id === userData.member_id);
-    if (currentMember && !memberOptions.some(opt => opt.value === currentMember.id)) {
-      memberOptions.unshift({
-        value: currentMember.id,
-        label: `${currentMember.first_name} ${currentMember.last_name} (${currentMember.email})`,
-      });
-    }
   }
 
   return (
@@ -316,54 +245,47 @@ function UserForm() {
         <form onSubmit={handleSubmit} className="border-t border-gray-200">
           <div className="px-4 py-5 sm:px-6">
             <div className="grid grid-cols-1 gap-y-6 gap-x-4 sm:grid-cols-2">
-              {!id && (
-                <>
-                  <div className="sm:col-span-2">
-                    <label htmlFor="member" className="block text-sm font-medium text-gray-700">
-                      Assign to Member
-                    </label>
-                    <div className="mt-1">
-                      <Select
-                        id="member"
-                        value={memberOptions.find(opt => opt.value === formData.member_id)}
-                        onChange={(option) => {
-                          const member = availableMembers?.find(m => m.id === option?.value);
-                          setFormData(prev => ({
-                            ...prev,
-                            member_id: option?.value,
-                            email: member?.email || prev.email,
-                          }));
-                        }}
-                        options={memberOptions}
-                        isClearable
-                        isSearchable
-                        placeholder="Select a member to assign this user account to..."
-                        className="react-select-container"
-                        classNamePrefix="react-select"
-                      />
-                    </div>
-                    <p className="mt-2 text-sm text-gray-500">
-                      Optional. If selected, the member's email will be used for the user account.
-                    </p>
-                  </div>
+              <div className="sm:col-span-2">
+                <label htmlFor="email" className="block text-sm font-medium text-gray-700">
+                  Email Address {!id && '*'}
+                </label>
+                <input
+                  type="email"
+                  id="email"
+                  value={formData.email}
+                  onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
+                  required={!id}
+                  disabled={!!id}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm disabled:bg-gray-100"
+                  placeholder="user@example.com"
+                />
+              </div>
 
-                  <div className="sm:col-span-2">
-                    <label htmlFor="email" className="block text-sm font-medium text-gray-700">
-                      Email Address {!formData.member_id && '*'}
-                    </label>
-                    <input
-                      type="email"
-                      id="email"
-                      value={formData.email}
-                      onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
-                      required={!formData.member_id}
-                      disabled={!!formData.member_id}
-                      className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm disabled:bg-gray-100"
-                      placeholder="user@example.com"
-                    />
-                  </div>
-                </>
-              )}
+              <div>
+                <label htmlFor="first_name" className="block text-sm font-medium text-gray-700">
+                  First Name
+                </label>
+                <input
+                  type="text"
+                  id="first_name"
+                  value={formData.first_name}
+                  onChange={(e) => setFormData(prev => ({ ...prev, first_name: e.target.value }))}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="last_name" className="block text-sm font-medium text-gray-700">
+                  Last Name
+                </label>
+                <input
+                  type="text"
+                  id="last_name"
+                  value={formData.last_name}
+                  onChange={(e) => setFormData(prev => ({ ...prev, last_name: e.target.value }))}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
+                />
+              </div>
 
               <div className="sm:col-span-2">
                 <label htmlFor="password" className="block text-sm font-medium text-gray-700">
@@ -392,13 +314,13 @@ function UserForm() {
                         <input
                           id={`role-${role.id}`}
                           type="checkbox"
-                          checked={formData.roles.includes(role.id)}
+                          checked={formData.roles.includes(role.name)}
                           onChange={(e) => {
                             setFormData(prev => ({
                               ...prev,
                               roles: e.target.checked
-                                ? [...prev.roles, role.id]
-                                : prev.roles.filter((id) => id !== role.id),
+                                ? [...prev.roles, role.name]
+                                : prev.roles.filter((name) => name !== role.name),
                             }));
                           }}
                           className="focus:ring-primary-500 h-4 w-4 text-primary-600 border-gray-300 rounded"
@@ -439,14 +361,15 @@ function UserForm() {
                     <Loader2 className="animate-spin -ml-1 mr-2 h-5 w-5" />
                     Saving...
                   </>
+                ) : id ? (
+                  <>
+                    <Save className="-ml-1 mr-2 h-5 w-5" />
+                    Save Changes
+                  </>
                 ) : (
                   <>
-                    {id ? (
-                      <Save className="-ml-1 mr-2 h-5 w-5" />
-                    ) : (
-                      <UserPlus className="-ml-1 mr-2 h-5 w-5" />
-                    )}
-                    {id ? 'Save Changes' : 'Create User'}
+                    <UserPlus className="-ml-1 mr-2 h-5 w-5" />
+                    Create User
                   </>
                 )}
               </button>
@@ -456,6 +379,6 @@ function UserForm() {
       </div>
     </div>
   );
-}
+};
 
 export default UserForm;

@@ -1,52 +1,40 @@
 import React, { useState, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
-import Select from 'react-select';
 import { supabase } from '../../lib/supabase';
 import { useCurrencyStore } from '../../stores/currencyStore';
 import { formatCurrency } from '../../utils/currency';
+import { groupBy } from 'lodash-es';
+import { Card } from '../../components/ui2/card';
+import { Input } from '../../components/ui2/input';
+import { Button } from '../../components/ui2/button';
+import { DatePickerInput } from '../../components/ui2/date-picker';
+import { Combobox } from '../../components/ui2/combobox';
+import { Badge } from '../../components/ui2/badge';
 import {
   ArrowLeft,
   Save,
   Loader2,
-  AlertCircle,
-  CheckCircle2,
   Plus,
-  Minus,
   Trash2,
+  TrendingUp,
+  TrendingDown,
+  DollarSign,
   Calculator,
   PieChart,
+  Users,
 } from 'lucide-react';
 
 type Transaction = {
   id?: string;
   type: 'income' | 'expense';
-  category: string;
+  category_id: string;
   amount: number;
   description: string;
   date: string;
   member_id?: string;
   budget_id?: string;
   created_by?: string;
-};
-
-type Member = {
-  id: string;
-  first_name: string;
-  last_name: string;
-};
-
-type Budget = {
-  id: string;
-  name: string;
-  category: string;
-  amount: number;
-  used_amount: number;
-};
-
-type SelectOption = {
-  value: string;
-  label: string;
 };
 
 function BulkTransactionEntry() {
@@ -57,115 +45,88 @@ function BulkTransactionEntry() {
   const [success, setSuccess] = useState<string | null>(null);
   const [transactionType, setTransactionType] = useState<'income' | 'expense'>('income');
   const [transactions, setTransactions] = useState<Partial<Transaction>[]>([{
-    type: 'income', // This will be updated when we change transaction type
+    type: 'income',
     amount: 0,
-    category: 'tithe',
+    category_id: '',
     description: '',
     date: new Date().toISOString().split('T')[0],
   }]);
 
-  // Refs for handling keyboard navigation
-  const tableRef = useRef<HTMLTableElement>(null);
+  // Get current tenant
+  const { data: currentTenant } = useQuery({
+    queryKey: ['current-tenant'],
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc('get_current_tenant');
+      if (error) throw error;
+      return data?.[0];
+    },
+  });
 
-  // Calculate running total
-  const runningTotal = useMemo(() => 
-    transactions.reduce((sum, t) => sum + (t.amount || 0), 0),
-    [transactions]
-  );
-
-  // Calculate category totals
-  const categoryTotals = useMemo(() => {
-    const totals: Record<string, number> = {};
-    transactions.forEach(t => {
-      if (t.category && t.amount) {
-        totals[t.category] = (totals[t.category] || 0) + t.amount;
-      }
-    });
-    return totals;
-  }, [transactions]);
-
-  // Fetch members and budgets
+  // Fetch members
   const { data: members } = useQuery({
     queryKey: ['members'],
     queryFn: async () => {
       const { data, error } = await supabase
         .from('members')
         .select('id, first_name, last_name')
+        .eq('tenant_id', currentTenant?.id)
         .is('deleted_at', null)
-        .order('first_name');
+        .order('last_name');
 
       if (error) throw error;
-      return data as Member[];
+      return data;
     },
+    enabled: !!currentTenant?.id,
   });
 
+  // Fetch budgets
   const { data: budgets } = useQuery({
     queryKey: ['budgets'],
     queryFn: async () => {
       const { data, error } = await supabase
         .from('budgets')
         .select('*')
+        .eq('tenant_id', currentTenant?.id)
         .order('name');
 
       if (error) throw error;
-      return data as Budget[];
+      return data;
     },
+    enabled: !!currentTenant?.id,
   });
 
-  const memberOptions = useMemo(() => 
-    members?.map(member => ({
-      value: member.id,
-      label: `${member.first_name} ${member.last_name}`
-    })) || [],
-    [members]
-  );
+  // Fetch categories
+  const { data: categories } = useQuery({
+    queryKey: ['categories', transactionType],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('categories')
+        .select('*')
+        .eq('tenant_id', currentTenant?.id)
+        .eq('is_active', true)
+        .eq('type', transactionType === 'income' ? 'income_transaction' : 'expense_transaction')
+        .is('deleted_at', null)
+        .order('sort_order', { ascending: true });
 
-  const budgetOptions = useMemo(() => 
-    budgets?.map(budget => ({
-      value: budget.id,
-      label: `${budget.name} (${formatCurrency(budget.amount - budget.used_amount, currency)} remaining)`
-    })) || [],
-    [budgets, currency]
-  );
-
-  const categoryOptions = {
-    income: [
-      { value: 'tithe', label: 'Tithe' },
-      { value: 'first_fruit_offering', label: 'First Fruit Offering' },
-      { value: 'love_offering', label: 'Love Offering' },
-      { value: 'mission_offering', label: 'Mission Offering' },
-      { value: 'mission_pledge', label: 'Mission Pledge' },
-      { value: 'building_offering', label: 'Building Offering' },
-      { value: 'lot_offering', label: 'Lot Offering' },
-      { value: 'other', label: 'Other' }
-    ],
-    expense: [
-      { value: 'ministry_expense', label: 'Ministry Expense' },
-      { value: 'payroll', label: 'Payroll' },
-      { value: 'utilities', label: 'Utilities' },
-      { value: 'maintenance', label: 'Maintenance' },
-      { value: 'events', label: 'Events' },
-      { value: 'missions', label: 'Missions' },
-      { value: 'education', label: 'Education' },
-      { value: 'other', label: 'Other' }
-    ]
-  };
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!currentTenant?.id,
+  });
 
   const addTransactionsMutation = useMutation({
     mutationFn: async (transactions: Partial<Transaction>[]) => {
-      // Get current user ID first
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       if (userError) throw userError;
       if (!user) throw new Error('Not authenticated');
 
-      // Prepare transactions with user ID and correct type
       const transactionsWithUser = transactions.map(t => ({
         ...t,
-        type: transactionType, // Use the current transaction type
+        type: transactionType,
+        tenant_id: currentTenant?.id,
         created_by: user.id
       }));
 
-      // Insert all transactions
       const { data, error } = await supabase
         .from('financial_transactions')
         .insert(transactionsWithUser)
@@ -181,7 +142,7 @@ function BulkTransactionEntry() {
       setTransactions([{
         type: transactionType,
         amount: 0,
-        category: transactionType === 'income' ? 'tithe' : 'ministry_expense',
+        category_id: '',
         description: '',
         date: new Date().toISOString().split('T')[0],
       }]);
@@ -198,7 +159,7 @@ function BulkTransactionEntry() {
     
     const validTransactions = transactions.filter(t => 
       t.amount && t.amount > 0 && 
-      t.category && 
+      t.category_id && 
       t.date &&
       ((transactionType === 'income' && t.member_id) || 
        (transactionType === 'expense' && t.budget_id))
@@ -216,16 +177,16 @@ function BulkTransactionEntry() {
     }
   };
 
-  const handleAddRow = () => {
+  const handleAddRow = (copyPrevious = true) => {
     const lastTransaction = transactions[transactions.length - 1];
     setTransactions([...transactions, {
       type: transactionType,
       amount: 0,
-      category: lastTransaction.category,
+      category_id: copyPrevious ? lastTransaction.category_id : '',
       description: '',
-      date: lastTransaction.date,
-      member_id: transactionType === 'income' ? lastTransaction.member_id : undefined,
-      budget_id: transactionType === 'expense' ? lastTransaction.budget_id : undefined,
+      date: copyPrevious ? lastTransaction.date : new Date().toISOString().split('T')[0],
+      member_id: copyPrevious ? lastTransaction.member_id : undefined,
+      budget_id: copyPrevious ? lastTransaction.budget_id : undefined,
     }]);
   };
 
@@ -235,184 +196,231 @@ function BulkTransactionEntry() {
     }
   };
 
-  const handleInputChange = (
-    index: number,
-    field: keyof Transaction,
-    value: string | number | SelectOption | null
-  ) => {
+  const handleInputChange = (index: number, field: keyof Transaction, value: any) => {
     const newTransactions = [...transactions];
-    if (value && typeof value === 'object' && 'value' in value) {
-      newTransactions[index] = {
-        ...newTransactions[index],
-        [field]: value.value,
-      };
-    } else {
-      newTransactions[index] = {
-        ...newTransactions[index],
-        [field]: field === 'amount' ? Number(value) : value,
-      };
-    }
+    newTransactions[index] = {
+      ...newTransactions[index],
+      [field]: field === 'amount' ? (value === '' ? 0 : Number(value)) : value,
+    };
     setTransactions(newTransactions);
   };
 
-  // Handle transaction type change
-  const handleTransactionTypeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const newType = e.target.value as 'income' | 'expense';
-    setTransactionType(newType);
-    
-    // Update all existing transactions with the new type and appropriate category
-    setTransactions(transactions.map(t => ({
-      type: newType,
-      amount: t.amount || 0,
-      category: newType === 'income' ? 'tithe' : 'ministry_expense',
-      description: t.description || '',
-      date: t.date || new Date().toISOString().split('T')[0],
-      member_id: newType === 'income' ? t.member_id : undefined,
-      budget_id: newType === 'expense' ? t.budget_id : undefined,
-    })));
-  };
-
-  const handleKeyDown = (
-    e: React.KeyboardEvent<HTMLInputElement | HTMLSelectElement>,
-    index: number,
-    field: keyof Transaction
-  ) => {
-    if (e.key === 'Enter' || e.key === 'Tab') {
+  const handleKeyDown = (e: React.KeyboardEvent, index: number, field: keyof Transaction) => {
+    if (e.key === 'Tab' && !e.shiftKey && index === transactions.length - 1) {
       e.preventDefault();
-      
-      if (e.shiftKey) {
-        // Handle Shift+Tab - move to previous input
-        const row = (e.target as HTMLElement).closest('tr');
-        if (!row) return;
-
-        const inputs = Array.from(row.querySelectorAll('input, .react-select__input'));
-        const currentIndex = inputs.indexOf(e.target as HTMLElement);
-        
-        if (currentIndex > 0) {
-          // Move to previous input in the same row
-          const prevInput = inputs[currentIndex - 1];
-          if (prevInput) {
-            (prevInput as HTMLElement).focus();
-          }
-        } else if (index > 0) {
-          // Move to last input of previous row
-          const prevRow = row.previousElementSibling;
-          if (prevRow) {
-            const prevInputs = Array.from(prevRow.querySelectorAll('input, .react-select__input'));
-            const lastInput = prevInputs[prevInputs.length - 1];
-            if (lastInput) {
-              (lastInput as HTMLElement).focus();
-            }
-          }
-        }
-      } else {
-        // Handle Tab/Enter - move to next input
-        const row = (e.target as HTMLElement).closest('tr');
-        if (!row) return;
-
-        const inputs = Array.from(row.querySelectorAll('input, .react-select__input'));
-        const currentIndex = inputs.indexOf(e.target as HTMLElement);
-        
-        if (currentIndex < inputs.length - 1) {
-          // Move to next input in the same row
-          const nextInput = inputs[currentIndex + 1];
-          if (nextInput) {
-            (nextInput as HTMLElement).focus();
-          }
-        } else if (index === transactions.length - 1) {
-          // Last input of last row - create new row and focus its first input
-          handleAddRow();
-          setTimeout(() => {
-            const newRow = tableRef.current?.querySelector('tr:last-child');
-            if (newRow) {
-              const categorySelect = newRow.querySelector('.react-select__input');
-              if (categorySelect) {
-                (categorySelect as HTMLElement).focus();
-              }
-            }
-          }, 0);
-        } else {
-          // Move to first input of next row
-          const nextRow = row.nextElementSibling;
-          if (nextRow) {
-            const categorySelect = nextRow.querySelector('.react-select__input');
-            if (categorySelect) {
-              (categorySelect as HTMLElement).focus();
-            }
-          }
-        }
-      }
+      handleAddRow(true);
     }
   };
 
-  const selectStyles = {
-    menuPortal: (base: any) => ({ ...base, zIndex: 9999 }),
-    menu: (base: any) => ({ ...base, zIndex: 9999 }),
-  };
+  const memberOptions = React.useMemo(() => 
+    members?.map(m => ({
+      value: m.id,
+      label: `${m.first_name} ${m.last_name}`
+    })) || [], 
+    [members]
+  );
+
+  const budgetOptions = React.useMemo(() => 
+    budgets?.map(b => ({
+      value: b.id,
+      label: `${b.name} (${formatCurrency(b.amount - (b.used_amount || 0), currency)} remaining)`
+    })) || [],
+    [budgets, currency]
+  );
+
+  const categoryOptions = React.useMemo(() => 
+    categories?.map(c => ({
+      value: c.id,
+      label: c.name
+    })) || [],
+    [categories]
+  );
+
+  // Calculate running totals
+  const runningTotals = useMemo(() => {
+    // Calculate total with proper decimal handling
+    const total = Number(transactions.reduce((sum, t) => {
+      const amount = Number(t.amount) || 0;
+      return Number((sum + amount).toFixed(2));
+    }, 0));
+
+    // Calculate category totals with proper decimal handling
+    const categoryTotals: Record<string, number> = {};
+    transactions.forEach(t => {
+      if (t.category_id && t.amount) {
+        const amount = Number(t.amount) || 0;
+        const currentTotal = categoryTotals[t.category_id] || 0;
+        categoryTotals[t.category_id] = Number((currentTotal + amount).toFixed(2));
+      }
+    });
+
+    // Calculate person totals with proper decimal handling
+    const personTotals: Record<string, number> = {};
+    transactions.forEach(t => {
+      const personId = transactionType === 'income' ? t.member_id : t.budget_id;
+      if (personId && t.amount) {
+        const amount = Number(t.amount) || 0;
+        const currentTotal = personTotals[personId] || 0;
+        personTotals[personId] = Number((currentTotal + amount).toFixed(2));
+      }
+    });
+
+    return {
+      total,
+      categoryTotals,
+      personTotals
+    };
+  }, [transactions, transactionType]);
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    <div className="max-w-8xl mx-auto px-4 sm:px-6 lg:px-8">
       <div className="mb-6">
-        <button
+        <Button
+          variant="ghost"
           onClick={() => navigate('/finances')}
-          className="flex items-center text-gray-600 hover:text-gray-900"
+          className="flex items-center"
         >
           <ArrowLeft className="h-5 w-5 mr-2" />
           Back to Finances
-        </button>
+        </Button>
       </div>
 
-      <div className="sm:flex sm:items-center">
-        <div className="sm:flex-auto">
+      <div className="sm:flex sm:items-center sm:justify-between mb-6">
+        <div>
           <h1 className="text-2xl font-semibold text-gray-900">Bulk Transaction Entry</h1>
           <p className="mt-2 text-sm text-gray-700">
-            Enter multiple {transactionType} transactions at once
+            Add multiple transactions at once
           </p>
         </div>
-        <div className="mt-4 sm:mt-0 sm:ml-16 sm:flex-none flex items-center space-x-4">
-          <div className="flex items-center space-x-2">
-            <Calculator className="h-5 w-5 text-gray-400" />
-            <span className="text-sm font-medium text-gray-700">
-              Total: {formatCurrency(runningTotal, currency)}
-            </span>
+        
+        <div className="mt-4 sm:mt-0 flex flex-col sm:items-end space-y-4">
+          <div className="flex items-center space-x-4">
+            <div className="flex items-center space-x-2 bg-white rounded-lg shadow-sm p-1 border border-gray-200">
+              <Button
+                type="button"
+                onClick={() => setTransactionType('income')}
+                className={`flex items-center px-4 py-2 rounded-md text-sm font-medium transition-colors duration-200 ${
+                  transactionType === 'income'
+                    ? 'bg-primary-100 text-primary-700'
+                    : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                <TrendingUp className={`h-4 w-4 mr-2 ${
+                  transactionType === 'income' ? 'text-primary-600' : 'text-gray-400'
+                }`} />
+                Income
+              </Button>
+              <Button
+                type="button"
+                onClick={() => setTransactionType('expense')}
+                className={`flex items-center px-4 py-2 rounded-md text-sm font-medium transition-colors duration-200 ${
+                  transactionType === 'expense'
+                    ? 'bg-primary-100 text-primary-700'
+                    : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                <TrendingDown className={`h-4 w-4 mr-2 ${
+                  transactionType === 'expense' ? 'text-primary-600' : 'text-gray-400'
+                }`} />
+                Expense
+              </Button>
+            </div>
           </div>
-          <select
-            value={transactionType}
-            onChange={handleTransactionTypeChange}
-            className="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
-          >
-            <option value="income">Income</option>
-            <option value="expense">Expense</option>
-          </select>
         </div>
       </div>
 
-      {/* Category Totals */}
-      <div className="mt-4 bg-white shadow overflow-hidden sm:rounded-lg">
-        <div className="px-4 py-5 sm:p-6">
-          <h3 className="text-lg leading-6 font-medium text-gray-900 flex items-center">
-            <PieChart className="h-5 w-5 mr-2 text-gray-400" />
-            Category Totals
-          </h3>
-          <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {Object.entries(categoryTotals).map(([category, total]) => (
-              <div key={category} className="bg-gray-50 px-4 py-3 rounded-lg">
-                <dt className="text-sm font-medium text-gray-500">
-                  {categoryOptions[transactionType].find(opt => opt.value === category)?.label || category}
-                </dt>
-                <dd className="mt-1 text-lg font-semibold text-gray-900">
-                  {formatCurrency(total, currency)}
-                </dd>
+      {/* Running Totals */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3 mb-8">
+        {/* Overall Total */}
+        <Card className="bg-white shadow-sm hover:shadow-md transition-shadow duration-200">
+          <div className="p-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center">
+                <Calculator className="h-5 w-5 text-primary mr-2" />
+                <h3 className="text-sm font-medium text-gray-900">Running Total</h3>
               </div>
-            ))}
+              <Badge variant={transactionType === 'income' ? 'success' : 'destructive'}>
+                {transactionType === 'income' ? 'Income' : 'Expense'}
+              </Badge>
+            </div>
+            <p className="mt-2 text-2xl font-semibold text-gray-900">
+              {formatCurrency(runningTotals.total || 0, currency)}
+            </p>
           </div>
-        </div>
+        </Card>
+
+        {/* Category Breakdown */}
+        <Card className="bg-white shadow-sm hover:shadow-md transition-shadow duration-200">
+          <div className="p-6">
+            <div className="flex items-center mb-4">
+              <PieChart className="h-5 w-5 text-primary mr-2" />
+              <h3 className="text-sm font-medium text-gray-900">By Category</h3>
+            </div>
+            <div className="space-y-2 max-h-32 overflow-y-auto pr-2">
+              {Object.entries(runningTotals.categoryTotals).map(([categoryId, amount]) => {
+                const category = categories?.find(c => c.id === categoryId);
+                return (
+                  <div key={categoryId} className="flex justify-between items-center py-1 border-b border-gray-100 last:border-0">
+                    <span className="text-sm text-gray-600 truncate mr-2">
+                      {category?.name || 'Unknown'}
+                    </span>
+                    <span className="text-sm font-medium text-gray-900 whitespace-nowrap">
+                      {formatCurrency(amount || 0, currency)}
+                    </span>
+                  </div>
+                );
+              })}
+              {Object.keys(runningTotals.categoryTotals).length === 0 && (
+                <div className="text-sm text-gray-500 text-center py-2">
+                  No categories yet
+                </div>
+              )}
+            </div>
+          </div>
+        </Card>
+
+        {/* Person Breakdown */}
+        <Card className="bg-white shadow-sm hover:shadow-md transition-shadow duration-200">
+          <div className="p-6">
+            <div className="flex items-center mb-4">
+              <Users className="h-5 w-5 text-primary mr-2" />
+              <h3 className="text-sm font-medium text-gray-900">
+                By {transactionType === 'income' ? 'Member' : 'Budget'}
+              </h3>
+            </div>
+            <div className="space-y-2 max-h-32 overflow-y-auto pr-2">
+              {Object.entries(runningTotals.personTotals).map(([personId, amount]) => {
+                const person = transactionType === 'income'
+                  ? members?.find(m => m.id === personId)
+                  : budgets?.find(b => b.id === personId);
+                const label = transactionType === 'income'
+                  ? person ? `${person.first_name} ${person.last_name}` : 'Unknown'
+                  : person?.name || 'Unknown';
+                return (
+                  <div key={personId} className="flex justify-between items-center py-1 border-b border-gray-100 last:border-0">
+                    <span className="text-sm text-gray-600 truncate mr-2">
+                      {label}
+                    </span>
+                    <span className="text-sm font-medium text-gray-900 whitespace-nowrap">
+                      {formatCurrency(amount || 0, currency)}
+                    </span>
+                  </div>
+                );
+              })}
+              {Object.keys(runningTotals.personTotals).length === 0 && (
+                <div className="text-sm text-gray-500 text-center py-2">
+                  No {transactionType === 'income' ? 'members' : 'budgets'} yet
+                </div>
+              )}
+            </div>
+          </div>
+        </Card>
       </div>
 
+      {/* Error and Success messages */}
       {error && (
-        <div className="mt-4 rounded-md bg-red-50 p-4">
+        <div className="mb-6 rounded-md bg-red-50 p-4">
           <div className="flex">
-            <AlertCircle className="h-5 w-5 text-red-400" />
             <div className="ml-3">
               <h3 className="text-sm font-medium text-red-800">{error}</h3>
             </div>
@@ -421,9 +429,8 @@ function BulkTransactionEntry() {
       )}
 
       {success && (
-        <div className="mt-4 rounded-md bg-green-50 p-4">
+        <div className="mb-6 rounded-md bg-green-50 p-4">
           <div className="flex">
-            <CheckCircle2 className="h-5 w-5 text-green-400" />
             <div className="ml-3">
               <h3 className="text-sm font-medium text-green-800">{success}</h3>
             </div>
@@ -431,177 +438,150 @@ function BulkTransactionEntry() {
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="mt-8">
-        <div className="overflow-x-auto">
-          <table ref={tableRef} className="min-w-full divide-y divide-gray-300">
-            <thead className="bg-gray-50">
-              <tr>
-                <th scope="col" className="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900">
-                  Date
-                </th>
-                <th scope="col" className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
-                  {transactionType === 'income' ? 'Member' : 'Budget'}
-                </th>
-                <th scope="col" className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
-                  Category
-                </th>
-                <th scope="col" className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
-                  Amount
-                </th>
-                <th scope="col" className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
-                  Description
-                </th>
-                <th scope="col" className="relative py-3.5 pl-3 pr-4 sm:pr-6">
-                  <span className="sr-only">Actions</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200 bg-white">
-              {transactions.map((transaction, index) => (
-                <tr key={index}>
-                  <td className="whitespace-nowrap py-4 pl-4 pr-3 text-sm">
-                    <input
-                      type="date"
-                      value={transaction.date || ''}
-                      onChange={(e) => handleInputChange(index, 'date', e.target.value)}
-                      onKeyDown={(e) => handleKeyDown(e, index, 'date')}
-                      className="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
-                      required
-                    />
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-4 text-sm">
-                    {transactionType === 'income' ? (
-                      <Select
-                        value={memberOptions.find(option => option.value === transaction.member_id)}
-                        onChange={(option) => handleInputChange(index, 'member_id', option)}
-                        options={memberOptions}
-                        className="react-select-container"
-                        classNamePrefix="react-select"
-                        isSearchable
-                        required
-                        placeholder="Select Member"
-                        menuPortalTarget={document.body}
-                        styles={selectStyles}
-                      />
-                    ) : (
-                      <Select
-                        value={budgetOptions.find(option => option.value === transaction.budget_id)}
-                        onChange={(option) => handleInputChange(index, 'budget_id', option)}
-                        options={budgetOptions}
-                        className="react-select-container"
-                        classNamePrefix="react-select"
-                        isSearchable
-                        required
-                        placeholder="Select Budget"
-                        menuPortalTarget={document.body}
-                        styles={selectStyles}
-                      />
-                    )}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-4 text-sm">
-                    <Select
-                      value={categoryOptions[transactionType].find(option => option.value === transaction.category)}
-                      onChange={(option) => handleInputChange(index, 'category', option)}
-                      options={categoryOptions[transactionType]}
-                      className="react-select-container"
-                      classNamePrefix="react-select"
-                      isSearchable
-                      required
-                      placeholder="Select Category"
-                      menuPortalTarget={document.body}
-                      styles={selectStyles}
-                    />
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-4 text-sm">
-                    <div className="relative rounded-md shadow-sm">
-                      <div className="pointer-events-none absolute inset-y-0 left-0 pl-3 flex items-center">
-                        <span className="text-gray-500 sm:text-sm">{currency.symbol}</span>
-                      </div>
-                      <input
-                        type="number"
-                        value={transaction.amount || ''}
-                        onChange={(e) => handleInputChange(index, 'amount', e.target.value)}
-                        onKeyDown={(e) => handleKeyDown(e, index, 'amount')}
-                        className="block w-full pl-7 rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
-                        placeholder="0.00"
-                        min="0"
-                        step="0.01"
-                        required
-                      />
-                    </div>
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-4 text-sm">
-                    <input
-                      type="text"
-                      value={transaction.description || ''}
-                      onChange={(e) => handleInputChange(index, 'description', e.target.value)}
-                      onKeyDown={(e) => handleKeyDown(e, index, 'description')}
-                      className="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
-                      placeholder="Enter description..."
-                    />
-                  </td>
-                  <td className="relative whitespace-nowrap py-4 pl-3 pr-4 text-right text-sm font-medium sm:pr-6">
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveRow(index)}
-                      className="text-red-600 hover:text-red-900"
-                      disabled={transactions.length === 1}
-                    >
-                      <Trash2 className="h-5 w-5" />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      <Card>
+        <form onSubmit={handleSubmit} className="p-6">
+          <div className="space-y-6">
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Date
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      {transactionType === 'income' ? 'Member' : 'Budget'}
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Category
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Amount
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Description
+                    </th>
+                    <th className="relative px-6 py-3">
+                      <span className="sr-only">Actions</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {transactions.map((transaction, index) => (
+                    <tr key={index}>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <DatePickerInput
+                          value={transaction.date ? new Date(transaction.date) : undefined}
+                          onChange={(date) => handleInputChange(
+                            index,
+                            'date',
+                            date?.toISOString().split('T')[0]
+                          )}
+                          onKeyDown={(e) => handleKeyDown(e, index, 'date')}
+                        />
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <Combobox
+                          options={transactionType === 'income' ? memberOptions : budgetOptions}
+                          value={transactionType === 'income' ? transaction.member_id : transaction.budget_id}
+                          onChange={(value) => handleInputChange(
+                            index,
+                            transactionType === 'income' ? 'member_id' : 'budget_id',
+                            value
+                          )}
+                          placeholder={transactionType === 'income' ? 'Select Member' : 'Select Budget'}
+                          onKeyDown={(e) => handleKeyDown(e, index, transactionType === 'income' ? 'member_id' : 'budget_id')}
+                        />
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <Combobox
+                          options={categoryOptions}
+                          value={transaction.category_id}
+                          onChange={(value) => handleInputChange(index, 'category_id', value)}
+                          placeholder="Select Category"
+                          onKeyDown={(e) => handleKeyDown(e, index, 'category_id')}
+                        />
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <Input
+                          type="number"
+                          value={transaction.amount || ''}
+                          onChange={(e) => handleInputChange(index, 'amount', e.target.value)}
+                          icon={<DollarSign className="h-4 w-4" />}
+                          min={0}
+                          step="0.01"
+                          className='min-w-32'
+                          onKeyDown={(e) => handleKeyDown(e, index, 'amount')}
+                          onBlur={(e) => {
+                            const value = Number(e.target.value);
+                            if (!isNaN(value)) {
+                              handleInputChange(index, 'amount', value);
+                            }
+                          }}
+                        />
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <Input
+                          value={transaction.description || ''}
+                          className='min-w-32'
+                          onChange={(e) => handleInputChange(index, 'description', e.target.value)}
+                          onKeyDown={(e) => handleKeyDown(e, index, 'description')}
+                        />
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleRemoveRow(index)}
+                          disabled={transactions.length === 1}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
 
-        <div className="mt-6 flex justify-between">
-          <button
-            type="button"
-            onClick={handleAddRow}
-            className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            Add Row
-          </button>
+            <div className="mt-6 flex justify-between">
+              <Button
+                type="button"
+                onClick={() => handleAddRow(false)}
+                variant="outline"
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                Add Row
+              </Button>
 
-          <div className="flex space-x-3">
-            <button
-              type="button"
-              onClick={() => {
-                setTransactions([{
-                  type: transactionType,
-                  amount: 0,
-                  category: transactionType === 'income' ? 'tithe' : 'ministry_expense',
-                  description: '',
-                  date: new Date().toISOString().split('T')[0],
-                }]);
-              }}
-              className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
-            >
-              Clear All
-            </button>
-            <button
-              type="submit"
-              disabled={addTransactionsMutation.isPending}
-              className="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
-            >
-              {addTransactionsMutation.isPending ? (
-                <>
-                  <Loader2 className="animate-spin -ml-1 mr-2 h-5 w-5" />
-                  Saving...
-                </>
-              ) : (
-                <>
-                  <Save className="-ml-1 mr-2 h-5 w-5" />
-                  Save All
-                </>
-              )}
-            </button>
+              <div className="flex space-x-3">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => navigate('/finances')}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={addTransactionsMutation.isPending}
+                >
+                  {addTransactionsMutation.isPending ? (
+                    <>
+                      <Loader2 className="animate-spin -ml-1 mr-2 h-5 w-5" />
+                      Saving...
+                    </>
+                  ) : (
+                    <>
+                      <Save className="-ml-1 mr-2 h-5 w-5" />
+                      Save All
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
           </div>
-        </div>
-      </form>
+        </form>
+      </Card>
     </div>
   );
 }

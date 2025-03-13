@@ -38,6 +38,19 @@ export const supabase = createClient(
     },
     db: {
       schema: 'public'
+    },
+    // Add retry configuration
+    realtime: {
+      params: {
+        eventsPerSecond: 2
+      }
+    },
+    // Add request timeouts
+    fetch: (url, options) => {
+      return fetch(url, {
+        ...options,
+        signal: AbortSignal.timeout(30000) // 30 second timeout
+      });
     }
   }
 );
@@ -56,3 +69,11 @@ export const checkSupabaseConnection = async (): Promise<boolean> => {
     return false;
   }
 };
+
+// Add auth state change listener
+supabase.auth.onAuthStateChange((event, session) => {
+  if (event === 'SIGNED_OUT' || event === 'USER_DELETED') {
+    // Clear any stored data
+    localStorage.removeItem('sb-' + supabaseUrl?.split('.')[0].split('//')[1] + '-auth-token');
+  }
+});

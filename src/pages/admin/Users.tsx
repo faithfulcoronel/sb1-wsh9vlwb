@@ -2,8 +2,8 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '../../lib/supabase';
-import { usePermissions } from '../../hooks/usePermissions';
 import PermissionGate from '../../components/PermissionGate';
+import { usePermissions } from '../../hooks/usePermissions';
 import { useMessageStore } from '../../components/MessageHandler';
 import {
   Plus,
@@ -30,22 +30,32 @@ function Users() {
   const [searchTerm, setSearchTerm] = useState('');
   const [userToDelete, setUserToDelete] = useState<User | null>(null);
 
-  const { data: users, isLoading } = useQuery({
-    queryKey: ['users'],
+  // Get current tenant ID
+  const { data: currentTenant } = useQuery({
+    queryKey: ['current-tenant'],
     queryFn: async () => {
-      if (!hasPermission('user.view')) {
-        return [];
-      }
+      const { data, error } = await supabase
+        .rpc('get_current_tenant');
 
-      // Get all users using the secure function
-      const { data: authUsers, error: authError } = await supabase
-        .rpc('get_auth_users');
+      if (error) throw error;
+      return data?.[0];
+    },
+  });
 
-      if (authError) throw authError;
+  // Get users for current tenant
+  const { data: users, isLoading } = useQuery({
+    queryKey: ['tenant-users', currentTenant?.id],
+    queryFn: async () => {
+      if (!currentTenant?.id) return [];
+
+      const { data: users, error } = await supabase
+        .rpc('get_tenant_users', { p_tenant_id: currentTenant.id });
+
+      if (error) throw error;
 
       // Get roles for each user
       const usersWithRoles = await Promise.all(
-        authUsers.map(async (user) => {
+        users.map(async (user) => {
           const { data: roles, error: rolesError } = await supabase
             .rpc('get_user_roles_with_permissions', { target_user_id: user.id });
 
@@ -60,7 +70,7 @@ function Users() {
 
       return usersWithRoles;
     },
-    enabled: hasPermission('user.view'),
+    enabled: !!currentTenant?.id && hasPermission('user.view'),
   });
 
   const deleteUserMutation = useMutation({
@@ -72,7 +82,7 @@ function Users() {
       if (error) throw error;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['users'] });
+      queryClient.invalidateQueries({ queryKey: ['tenant-users'] });
       addMessage({
         type: 'success',
         text: 'User deleted successfully',
@@ -83,9 +93,10 @@ function Users() {
     onError: (error: Error) => {
       addMessage({
         type: 'error',
-        text: error.message,
+        text: 'Failed to delete user',
         duration: 5000,
       });
+      console.error('Error deleting user:', error);
       setUserToDelete(null);
     },
   });
@@ -94,7 +105,7 @@ function Users() {
     setUserToDelete(user);
     addMessage({
       type: 'warning',
-      text: `Are you sure you want to delete ${user.email}? This action cannot be undone.`,
+      text: `Are you sure you want to delete ${user.email}?`,
       duration: 0, // Don't auto-dismiss
     });
   };
@@ -109,8 +120,16 @@ function Users() {
     }
   };
 
+  const handleEdit = (user: User) => {
+    navigate(`/admin/users/${user.id}/edit`);
+  };
+
   const filteredUsers = users?.filter((user) => {
-    const matchesSearch = user.email.toLowerCase().includes(searchTerm.toLowerCase());
+    if (!user) return false;
+
+    const matchesSearch = 
+      user.email.toLowerCase().includes(searchTerm.toLowerCase());
+    
     return matchesSearch;
   });
 
@@ -120,7 +139,7 @@ function Users() {
         <div className="sm:flex-auto">
           <h1 className="text-2xl font-semibold text-gray-900">Users</h1>
           <p className="mt-2 text-sm text-gray-700">
-            A list of all users in the system including their roles and permissions.
+            A list of all users in your church including their roles and permissions.
           </p>
         </div>
         <PermissionGate permission="user.create">
@@ -211,7 +230,7 @@ function Users() {
                             <PermissionGate permission="user.edit">
                               <button
                                 className="text-primary-600 hover:text-primary-900"
-                                onClick={() => navigate(`/admin/users/${user.id}/edit`)}
+                                onClick={() => handleEdit(user)}
                               >
                                 <Edit2 className="h-4 w-4" />
                               </button>

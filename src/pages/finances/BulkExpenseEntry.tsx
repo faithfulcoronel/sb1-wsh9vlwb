@@ -6,22 +6,31 @@ import { useCurrencyStore } from '../../stores/currencyStore';
 import { formatCurrency } from '../../utils/currency';
 import { parse, format, isValid } from 'date-fns';
 import * as XLSX from 'xlsx';
+import { Card, CardHeader, CardContent } from '../../components/ui2/card';
+import { Input } from '../../components/ui2/input';
+import { Button } from '../../components/ui2/button';
+import { Select } from '../../components/ui2/select';
+import { Badge } from '../../components/ui2/badge';
+import { Tabs } from '../../components/ui2/tabs';
+import { Combobox } from '../../components/ui2/combobox';
 import {
-  ArrowLeft,
-  Save,
-  Loader2,
-  AlertCircle,
-  CheckCircle2,
-  Upload,
   Plus,
   Minus,
   Download,
+  Upload,
+  ArrowLeft,
+  Save,
+  Loader2,
+  Calculator,
+  PieChart,
+  Users,
+  DollarSign,
 } from 'lucide-react';
 
 type BulkEntry = {
   budget_id: string;
   amount: number;
-  category: string;
+  category_id: string;
   description: string;
   date: string;
 };
@@ -44,13 +53,24 @@ function BulkExpenseEntry() {
   const [entries, setEntries] = useState<BulkEntry[]>([{
     budget_id: '',
     amount: 0,
-    category: 'ministry_expense',
+    category_id: '',
     description: '',
     date: new Date().toISOString().split('T')[0],
   }]);
 
+  // Get current tenant
+  const { data: currentTenant } = useQuery({
+    queryKey: ['current-tenant'],
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc('get_current_tenant');
+      if (error) throw error;
+      return data?.[0];
+    },
+  });
+
+  // Get budgets
   const { data: budgets } = useQuery({
-    queryKey: ['budgets'],
+    queryKey: ['budgets', currentTenant?.id],
     queryFn: async () => {
       const today = new Date().toISOString();
       
@@ -58,6 +78,7 @@ function BulkExpenseEntry() {
       const { data: budgets, error: budgetsError } = await supabase
         .from('budgets')
         .select('*')
+        .eq('tenant_id', currentTenant?.id)
         .lte('start_date', today)
         .gte('end_date', today);
 
@@ -69,6 +90,7 @@ function BulkExpenseEntry() {
           const { data: transactions, error: transactionsError } = await supabase
             .from('financial_transactions')
             .select('amount')
+            .eq('tenant_id', currentTenant?.id)
             .eq('budget_id', budget.id)
             .eq('type', 'expense');
 
@@ -85,6 +107,26 @@ function BulkExpenseEntry() {
 
       return budgetsWithUsage as Budget[];
     },
+    enabled: !!currentTenant?.id,
+  });
+
+  // Get expense categories
+  const { data: categories } = useQuery({
+    queryKey: ['categories', 'expense_transaction', currentTenant?.id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('categories')
+        .select('*')
+        .eq('tenant_id', currentTenant?.id)
+        .eq('is_active', true)
+        .eq('type', 'expense_transaction')
+        .is('deleted_at', null)
+        .order('sort_order');
+
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!currentTenant?.id,
   });
 
   const addBulkEntriesMutation = useMutation({
@@ -110,9 +152,10 @@ function BulkExpenseEntry() {
 
         return {
           type: 'expense' as const,
+          tenant_id: currentTenant?.id,
           budget_id: entry.budget_id,
           amount: entry.amount,
-          category: entry.category,
+          category_id: entry.category_id,
           description: entry.description || '',
           date: entry.date,
           created_by: user?.id,
@@ -135,7 +178,7 @@ function BulkExpenseEntry() {
       setEntries([{
         budget_id: '',
         amount: 0,
-        category: 'ministry_expense',
+        category_id: '',
         description: '',
         date: new Date().toISOString().split('T')[0],
       }]);
@@ -153,7 +196,7 @@ function BulkExpenseEntry() {
     const validEntries = entries.filter(entry => 
       entry.budget_id && 
       entry.amount > 0 && 
-      entry.category && 
+      entry.category_id && 
       entry.date
     );
 
@@ -173,7 +216,7 @@ function BulkExpenseEntry() {
     setEntries([...entries, {
       budget_id: '',
       amount: 0,
-      category: 'ministry_expense',
+      category_id: '',
       description: '',
       date: new Date().toISOString().split('T')[0],
     }]);
@@ -223,7 +266,7 @@ function BulkExpenseEntry() {
       const rows = text.split('\n');
       const headers = rows[0].split(',').map(h => h.trim().toLowerCase());
 
-      const requiredHeaders = ['budget_id', 'amount', 'category', 'date'];
+      const requiredHeaders = ['budget_id', 'amount', 'category_id', 'date'];
       const missingHeaders = requiredHeaders.filter(h => !headers.includes(h));
 
       if (missingHeaders.length > 0) {
@@ -258,8 +301,8 @@ function BulkExpenseEntry() {
             throw new Error(`Missing budget_id in row ${index + 2}`);
           }
 
-          if (!entry.category) {
-            throw new Error(`Missing category in row ${index + 2}`);
+          if (!entry.category_id) {
+            throw new Error(`Missing category_id in row ${index + 2}`);
           }
 
           return entry;
@@ -283,9 +326,9 @@ function BulkExpenseEntry() {
 
     // Transactions sheet (template)
     const transactionsData = [
-      ['budget_id', 'amount', 'category', 'date', 'description'],
-      ['budget-uuid', 1000, 'ministry_expense', '2025-02-12', 'Office Supplies'],
-      ['budget-uuid', 500, 'utilities', '2025-02-12', 'Electricity Bill'],
+      ['budget_id', 'amount', 'category_id', 'date', 'description'],
+      ['budget-uuid', 1000, 'category-uuid', '2025-02-12', 'Office Supplies'],
+      ['budget-uuid', 500, 'category-uuid', '2025-02-12', 'Electricity Bill'],
     ];
     const wsTransactions = XLSX.utils.aoa_to_sheet(transactionsData);
 
@@ -293,7 +336,7 @@ function BulkExpenseEntry() {
     wsTransactions['!cols'] = [
       { wch: 40 }, // budget_id
       { wch: 10 }, // amount
-      { wch: 15 }, // category
+      { wch: 40 }, // category_id
       { wch: 12 }, // date
       { wch: 30 }, // description
     ];
@@ -328,21 +371,19 @@ function BulkExpenseEntry() {
 
     // Categories Reference sheet
     const categoriesData = [
-      ['Category Code', 'Description'],
-      ['ministry_expense', 'General ministry expenses'],
-      ['payroll', 'Staff and employee salaries'],
-      ['utilities', 'Utility bills'],
-      ['maintenance', 'Building and equipment maintenance'],
-      ['events', 'Church events and programs'],
-      ['missions', 'Mission work and outreach'],
-      ['education', 'Educational programs'],
-      ['other', 'Other expenses'],
+      ['Category ID', 'Name', 'Description'],
+      ...(categories?.map(category => [
+        category.id,
+        category.name,
+        category.description || ''
+      ]) || [])
     ];
     const wsCategories = XLSX.utils.aoa_to_sheet(categoriesData);
 
     // Add column widths
     wsCategories['!cols'] = [
-      { wch: 20 }, // Category Code
+      { wch: 40 }, // Category ID
+      { wch: 20 }, // Name
       { wch: 40 }, // Description
     ];
 
@@ -364,8 +405,8 @@ function BulkExpenseEntry() {
       ['   - Expenses cannot exceed remaining budget amounts'],
       [''],
       ['3. Categories:'],
-      ['   - Refer to the "Categories Reference" sheet for valid category codes'],
-      ['   - Use the exact category codes as shown'],
+      ['   - Refer to the "Categories Reference" sheet for valid category IDs'],
+      ['   - Use the exact category IDs as shown'],
       [''],
       ['4. Tips:'],
       ['   - Save your file as .xlsx format'],
@@ -384,40 +425,93 @@ function BulkExpenseEntry() {
     XLSX.writeFile(wb, 'bulk-expense-template.xlsx');
   };
 
-  const formatStatus = (status: string) => {
-    return status.split('_').map(word => 
-      word.charAt(0).toUpperCase() + word.slice(1)
-    ).join(' ');
-  };
+  // Calculate running totals
+  const runningTotals = React.useMemo(() => {
+    // Calculate total with proper decimal handling
+    const total = Number(entries.reduce((sum, t) => {
+      const amount = Number(t.amount) || 0;
+      return Number((sum + amount).toFixed(2));
+    }, 0));
+
+    // Calculate category totals with proper decimal handling
+    const categoryTotals: Record<string, number> = {};
+    entries.forEach(t => {
+      if (t.category_id && t.amount) {
+        const amount = Number(t.amount) || 0;
+        const currentTotal = categoryTotals[t.category_id] || 0;
+        categoryTotals[t.category_id] = Number((currentTotal + amount).toFixed(2));
+      }
+    });
+
+    // Calculate budget totals with proper decimal handling
+    const budgetTotals: Record<string, number> = {};
+    entries.forEach(t => {
+      if (t.budget_id && t.amount) {
+        const amount = Number(t.amount) || 0;
+        const currentTotal = budgetTotals[t.budget_id] || 0;
+        budgetTotals[t.budget_id] = Number((currentTotal + amount).toFixed(2));
+      }
+    });
+
+    return {
+      total,
+      categoryTotals,
+      budgetTotals
+    };
+  }, [entries]);
+
+  // Convert budgets to Combobox options
+  const budgetOptions = React.useMemo(() => 
+    budgets?.map(b => ({
+      value: b.id,
+      label: `${b.name} (${formatCurrency(b.amount - (b.used_amount || 0), currency)} remaining)`
+    })) || [],
+    [budgets, currency]
+  );
+
+  // Convert categories to Combobox options
+  const categoryOptions = React.useMemo(() => 
+    categories?.map(c => ({
+      value: c.id,
+      label: c.name
+    })) || [],
+    [categories]
+  );
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       <div className="mb-6">
-        <button
+        <Button
+          variant="ghost"
           onClick={() => navigate('/finances')}
-          className="flex items-center text-gray-600 hover:text-gray-900"
+          className="flex items-center"
         >
           <ArrowLeft className="h-5 w-5 mr-2" />
           Back to Finances
-        </button>
+        </Button>
       </div>
 
       <div className="sm:flex sm:items-center sm:justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900">Bulk Expense Entry</h1>
-          <p className="mt-2 text-sm text-gray-700">
+          <h1 className="text-2xl font-semibold text-foreground">Bulk Expense Entry</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
             Add multiple expense transactions at once
           </p>
         </div>
         <div className="mt-4 sm:mt-0 flex space-x-3">
-          <button
+          <Button
+            variant="outline"
             onClick={downloadSampleCSV}
-            className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+            className="flex items-center"
           >
             <Download className="h-4 w-4 mr-2" />
-            Download Sample CSV
-          </button>
-          <label className="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 cursor-pointer">
+            Download Template
+          </Button>
+          <Button
+            variant="default"
+            className="flex items-center"
+            onClick={() => fileInputRef.current?.click()}
+          >
             <Upload className="h-4 w-4 mr-2" />
             Import CSV
             <input
@@ -427,35 +521,114 @@ function BulkExpenseEntry() {
               onChange={handleFileUpload}
               className="hidden"
             />
-          </label>
+          </Button>
         </div>
       </div>
 
+      {/* Running Totals */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3 mb-8">
+        {/* Overall Total */}
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center">
+                <Calculator className="h-5 w-5 text-primary mr-2" />
+                <h3 className="text-sm font-medium text-foreground">Running Total</h3>
+              </div>
+              <Badge variant="destructive">
+                Expense
+              </Badge>
+            </div>
+            <p className="mt-2 text-2xl font-semibold text-foreground">
+              {formatCurrency(runningTotals.total || 0, currency)}
+            </p>
+          </CardContent>
+        </Card>
+
+        {/* Category Breakdown */}
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex items-center mb-4">
+              <PieChart className="h-5 w-5 text-primary mr-2" />
+              <h3 className="text-sm font-medium text-foreground">By Category</h3>
+            </div>
+            <div className="space-y-2 max-h-32 overflow-y-auto pr-2">
+              {Object.entries(runningTotals.categoryTotals).map(([categoryId, amount]) => {
+                const category = categories?.find(c => c.id === categoryId);
+                return (
+                  <div key={categoryId} className="flex justify-between items-center py-1 border-b border-border last:border-0">
+                    <span className="text-sm text-muted-foreground truncate mr-2">
+                      {category?.name || 'Unknown'}
+                    </span>
+                    <span className="text-sm font-medium text-foreground whitespace-nowrap">
+                      {formatCurrency(amount || 0, currency)}
+                    </span>
+                  </div>
+                );
+              })}
+              {Object.keys(runningTotals.categoryTotals).length === 0 && (
+                <div className="text-sm text-muted-foreground text-center py-2">
+                  No categories yet
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Budget Breakdown */}
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex items-center mb-4">
+              <PieChart className="h-5 w-5 text-primary mr-2" />
+              <h3 className="text-sm font-medium text-foreground">By Budget</h3>
+            </div>
+            <div className="space-y-2 max-h-32 overflow-y-auto pr-2">
+              {Object.entries(runningTotals.budgetTotals).map(([budgetId, amount]) => {
+                const budget = budgets?.find(b => b.id === budgetId);
+                return (
+                  <div key={budgetId} className="flex justify-between items-center py-1 border-b border-border last:border-0">
+                    <span className="text-sm text-muted-foreground truncate mr-2">
+                      {budget?.name || 'Unknown'}
+                    </span>
+                    <span className="text-sm font-medium text-foreground whitespace-nowrap">
+                      {formatCurrency(amount || 0, currency)}
+                    </span>
+                  </div>
+                );
+              })}
+              {Object.keys(runningTotals.budgetTotals).length === 0 && (
+                <div className="text-sm text-muted-foreground text-center py-2">
+                  No budgets yet
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
       {error && (
-        <div className="mb-4 rounded-md bg-red-50 p-4">
+        <div className="mb-6 rounded-lg bg-destructive/15 p-4">
           <div className="flex">
-            <AlertCircle className="h-5 w-5 text-red-400" />
             <div className="ml-3">
-              <h3 className="text-sm font-medium text-red-800">{error}</h3>
+              <h3 className="text-sm font-medium text-destructive">{error}</h3>
             </div>
           </div>
         </div>
       )}
 
       {success && (
-        <div className="mb-4 rounded-md bg-green-50 p-4">
+        <div className="mb-6 rounded-lg bg-success/15 p-4">
           <div className="flex">
-            <CheckCircle2 className="h-5 w-5 text-green-400" />
             <div className="ml-3">
-              <h3 className="text-sm font-medium text-green-800">{success}</h3>
+              <h3 className="text-sm font-medium text-success">{success}</h3>
             </div>
           </div>
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="bg-white shadow overflow-hidden sm:rounded-lg">
-          <div className="px-4 py-5 sm:p-6">
+      <Card>
+        <form onSubmit={handleSubmit} className="p-6">
+          <div className="space-y-6">
             {entries.map((entry, index) => {
               const selectedBudget = budgets?.find(b => b.id === entry.budget_id);
               const remainingBudget = selectedBudget 
@@ -463,121 +636,72 @@ function BulkExpenseEntry() {
                 : 0;
 
               return (
-                <div key={index} className="mb-6 pb-6 border-b border-gray-200 last:border-0 last:mb-0 last:pb-0">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-lg font-medium text-gray-900">Entry #{index + 1}</h3>
+                <div key={index} className="space-y-4 pb-6 border-b border-border last:border-0">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-lg font-medium text-foreground">Entry #{index + 1}</h3>
                     {entries.length > 1 && (
-                      <button
-                        type="button"
+                      <Button
+                        variant="destructive"
+                        size="sm"
                         onClick={() => handleRemoveRow(index)}
-                        className="inline-flex items-center px-3 py-1 border border-transparent text-sm font-medium rounded-md text-red-700 bg-red-100 hover:bg-red-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                        className="flex items-center"
                       >
-                        <Minus className="h-4 w-4 mr-1" />
+                        <Minus className="h-4 w-4 mr-2" />
                         Remove
-                      </button>
+                      </Button>
                     )}
                   </div>
 
-                  <div className="grid grid-cols-1 gap-y-6 gap-x-4 sm:grid-cols-2 lg:grid-cols-3">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                     <div>
-                      <label htmlFor={`budget-${index}`} className="block text-sm font-medium text-gray-700">
-                        Budget *
-                      </label>
-                      <select
-                        id={`budget-${index}`}
+                      <Combobox
+                        options={budgetOptions}
                         value={entry.budget_id}
-                        onChange={(e) => handleInputChange(index, 'budget_id', e.target.value)}
-                        required
-                        className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
-                      >
-                        <option value="">Select a budget</option>
-                        {budgets?.map((budget) => (
-                          <option 
-                            key={budget.id} 
-                            value={budget.id}
-                            disabled={budget.amount <= budget.used_amount}
-                          >
-                            {budget.name} ({formatStatus(budget.category)}) - 
-                            {formatCurrency(budget.amount - budget.used_amount, currency)} remaining
-                          </option>
-                        ))}
-                      </select>
+                        onChange={(value) => handleInputChange(index, 'budget_id', value)}
+                        placeholder="Select Budget"
+                      />
                       {selectedBudget && (
-                        <p className="mt-1 text-sm text-gray-500">
+                        <p className="mt-1 text-sm text-muted-foreground">
                           Remaining: {formatCurrency(remainingBudget, currency)}
                         </p>
                       )}
                     </div>
 
                     <div>
-                      <label htmlFor={`amount-${index}`} className="block text-sm font-medium text-gray-700">
-                        Amount *
-                      </label>
-                      <div className="mt-1 relative rounded-md shadow-sm">
-                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                          <span className="text-gray-500 sm:text-sm">{currency.symbol}</span>
-                        </div>
-                        <input
-                          type="number"
-                          id={`amount-${index}`}
-                          value={entry.amount || ''}
-                          onChange={(e) => handleInputChange(index, 'amount', e.target.value)}
-                          required
-                          min="0"
-                          max={remainingBudget}
-                          step="0.01"
-                          className="mt-1 block w-full pl-7 rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
-                        />
-                      </div>
+                      <Input
+                        type="number"
+                        value={entry.amount || ''}
+                        onChange={(e) => handleInputChange(index, 'amount', e.target.value)}
+                        icon={<DollarSign className="h-4 w-4" />}
+                        placeholder="Amount"
+                        min={0}
+                        max={remainingBudget}
+                        step="0.01"
+                      />
                     </div>
 
                     <div>
-                      <label htmlFor={`category-${index}`} className="block text-sm font-medium text-gray-700">
-                        Category *
-                      </label>
-                      <select
-                        id={`category-${index}`}
-                        value={entry.category}
-                        onChange={(e) => handleInputChange(index, 'category', e.target.value)}
-                        required
-                        className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
-                      >
-                        <option value="ministry_expense">Ministry Expense</option>
-                        <option value="payroll">Payroll</option>
-                        <option value="utilities">Utilities</option>
-                        <option value="maintenance">Maintenance</option>
-                        <option value="events">Events</option>
-                        <option value="missions">Missions</option>
-                        <option value="education">Education</option>
-                        <option value="other">Other</option>
-                      </select>
+                      <Combobox
+                        options={categoryOptions}
+                        value={entry.category_id}
+                        onChange={(value) => handleInputChange(index, 'category_id', value)}
+                        placeholder="Select Category"
+                      />
                     </div>
 
                     <div>
-                      <label htmlFor={`date-${index}`} className="block text-sm font-medium text-gray-700">
-                        Date *
-                      </label>
-                      <input
+                      <Input
                         type="date"
-                        id={`date-${index}`}
                         value={entry.date}
                         onChange={(e) => handleInputChange(index, 'date', e.target.value)}
-                        required
-                        className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
                       />
                     </div>
 
                     <div className="sm:col-span-2 lg:col-span-3">
-                      <label htmlFor={`description-${index}`} className="block text-sm font-medium text-gray-700">
-                        Description
-                      </label>
-                      <input
-                        type="text"
-                        id={`description-${index}`}
+                      <Input
+                        placeholder="Description"
                         value={entry.description}
                         onChange={(e) => handleInputChange(index, 'description', e.target.value)}
-                        className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
-                        placeholder="Enter description..."
                       />
                     </div>
                   </div>
@@ -585,46 +709,46 @@ function BulkExpenseEntry() {
               );
             })}
 
-            <div className="mt-6 flex justify-between">
-              <button
+            <div className="flex justify-between">
+              <Button
                 type="button"
+                variant="outline"
                 onClick={handleAddRow}
-                className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+                className="flex items-center"
               >
                 <Plus className="h-4 w-4 mr-2" />
                 Add Another Entry
-              </button>
+              </Button>
 
               <div className="flex space-x-3">
-                <button
+                <Button
                   type="button"
+                  variant="outline"
                   onClick={() => navigate('/finances')}
-                  className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
                 >
                   Cancel
-                </button>
-                <button
+                </Button>
+                <Button
                   type="submit"
                   disabled={addBulkEntriesMutation.isPending}
-                  className="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
                 >
                   {addBulkEntriesMutation.isPending ? (
                     <>
-                      <Loader2 className="animate-spin -ml-1 mr-2 h-5 w-5" />
+                      <Loader2 className="animate-spin h-4 w-4 mr-2" />
                       Saving...
                     </>
                   ) : (
                     <>
-                      <Save className="-ml-1 mr-2 h-5 w-5" />
-                      Save All Entries
+                      <Save className="h-4 w-4 mr-2" />
+                      Save All
                     </>
                   )}
-                </button>
+                </Button>
               </div>
             </div>
           </div>
-        </div>
-      </form>
+        </form>
+      </Card>
     </div>
   );
 }

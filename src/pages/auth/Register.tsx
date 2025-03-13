@@ -1,238 +1,424 @@
-import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import { supabase, isSupabaseConfigured, checkSupabaseConnection } from '../../lib/supabase';
-import { UserPlus, AlertCircle, Wifi, Loader2, Database } from 'lucide-react';
+import React, { useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { supabase } from '../../lib/supabase';
+import { useMessageStore } from '../../components/MessageHandler';
+import { Card, CardHeader, CardContent } from '../../components/ui2/card';
+import { Input } from '../../components/ui2/input';
+import { Button } from '../../components/ui2/button';
+import { Separator } from '../../components/ui2/separator';
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogAction,
+  AlertDialogCancel,
+} from '../../components/ui2/alert-dialog';
+import {
+  Building2,
+  Mail,
+  Lock,
+  User,
+  Phone,
+  MapPin,
+  Globe,
+  Loader2,
+} from 'lucide-react';
+
+type RegistrationData = {
+  // User Info
+  email: string;
+  password: string;
+  confirmPassword: string;
+  firstName: string;
+  lastName: string;
+  
+  // Church Info
+  churchName: string;
+  subdomain: string;
+  address: string;
+  contactNumber: string;
+  churchEmail: string;
+  website: string;
+};
 
 function Register() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const navigate = useNavigate();
+  const { addMessage } = useMessageStore();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
-  const [isConnected, setIsConnected] = useState<boolean | null>(null);
+  const [formData, setFormData] = useState<RegistrationData>({
+    email: '',
+    password: '',
+    confirmPassword: '',
+    firstName: '',
+    lastName: '',
+    churchName: '',
+    subdomain: '',
+    address: '',
+    contactNumber: '',
+    churchEmail: '',
+    website: '',
+  });
 
-  useEffect(() => {
-    const checkConnection = async () => {
-      if (isSupabaseConfigured()) {
-        const connected = await checkSupabaseConnection();
-        setIsConnected(connected);
-      } else {
-        setIsConnected(false);
-      }
-    };
+  const validateForm = () => {
+    // Email validation
+    const emailRegex = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+    if (!emailRegex.test(formData.email)) {
+      setError('Please enter a valid email address');
+      return false;
+    }
 
-    checkConnection();
-  }, []);
+    // Password validation
+    if (formData.password.length < 8) {
+      setError('Password must be at least 8 characters long');
+      return false;
+    }
 
-  const handleRegister = async (e: React.FormEvent) => {
+    if (!/[A-Z]/.test(formData.password)) {
+      setError('Password must contain at least one uppercase letter');
+      return false;
+    }
+
+    if (!/[a-z]/.test(formData.password)) {
+      setError('Password must contain at least one lowercase letter');
+      return false;
+    }
+
+    if (!/[0-9]/.test(formData.password)) {
+      setError('Password must contain at least one number');
+      return false;
+    }
+
+    if (formData.password !== formData.confirmPassword) {
+      setError('Passwords do not match');
+      return false;
+    }
+
+    // Name validation
+    if (!formData.firstName.trim() || !formData.lastName.trim()) {
+      setError('Please enter your full name');
+      return false;
+    }
+
+    // Church validation
+    if (!formData.churchName.trim()) {
+      setError('Please enter your church name');
+      return false;
+    }
+
+    if (!formData.subdomain.trim()) {
+      setError('Please enter a subdomain');
+      return false;
+    }
+
+    const subdomainRegex = /^[a-z0-9-]+$/;
+    if (!subdomainRegex.test(formData.subdomain)) {
+      setError('Subdomain can only contain lowercase letters, numbers, and hyphens');
+      return false;
+    }
+
+    if (!formData.address.trim()) {
+      setError('Please enter your church address');
+      return false;
+    }
+
+    if (!formData.contactNumber.trim()) {
+      setError('Please enter a contact number');
+      return false;
+    }
+
+    if (!formData.churchEmail.trim()) {
+      setError('Please enter a church email');
+      return false;
+    }
+
+    if (!emailRegex.test(formData.churchEmail)) {
+      setError('Please enter a valid church email address');
+      return false;
+    }
+
+    return true;
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    if (!isSupabaseConfigured()) {
-      setError('Database connection not configured. Please contact the administrator.');
-      return;
-    }
+    setError(null);
 
-    if (!isConnected) {
-      setError('Unable to connect to the database. Please try again later.');
-      return;
-    }
-
-    if (!email || !password) {
-      setError('Please fill in all fields');
-      return;
-    }
-
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters long');
+    if (!validateForm()) {
       return;
     }
 
     setLoading(true);
-    setError(null);
 
     try {
-      // Check network connectivity first
-      if (!navigator.onLine) {
-        throw new Error('No internet connection. Please check your network and try again.');
-      }
-
-      const { data, error: signUpError } = await supabase.auth.signUp({
-        email,
-        password,
+      // Create user account
+      const { data: { user }, error: signUpError } = await supabase.auth.signUp({
+        email: formData.email,
+        password: formData.password,
         options: {
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
+          data: {
+            first_name: formData.firstName,
+            last_name: formData.lastName,
+          },
         },
       });
 
-      if (signUpError) {
-        if (signUpError.message.includes('network')) {
-          throw new Error('Network error. Please check your connection and try again.');
-        }
-        throw signUpError;
-      }
+      if (signUpError) throw signUpError;
+      if (!user) throw new Error('Failed to create user account');
 
-      if (data?.user) {
-        setSuccess(true);
-      } else {
-        throw new Error('Registration failed. Please try again.');
-      }
+      // Store registration data and navigate to onboarding
+      sessionStorage.setItem('registrationData', JSON.stringify({
+        userId: user.id,
+        email: formData.email,
+        firstName: formData.firstName,
+        lastName: formData.lastName,
+        churchName: formData.churchName,
+        subdomain: formData.subdomain,
+        address: formData.address,
+        contactNumber: formData.contactNumber,
+        churchEmail: formData.churchEmail,
+        website: formData.website,
+      }));
+
+      // Navigate to onboarding progress screen
+      navigate('/onboarding');
     } catch (error) {
       console.error('Registration error:', error);
-      
-      if (error instanceof Error) {
-        if (error.message.includes('network') || error.message.includes('internet')) {
-          setError('Unable to connect to the server. Please check your internet connection and try again.');
-        } else if (error.message.includes('email')) {
-          setError('This email address is invalid or already in use.');
-        } else if (error.message.includes('password')) {
-          setError('Password is too weak. Please use at least 6 characters.');
-        } else if (error.message.includes('rate limit')) {
-          setError('Too many attempts. Please try again in a few minutes.');
-        } else {
-          setError(error.message);
-        }
-      } else {
-        setError('An unexpected error occurred. Please try again later.');
-      }
+      setError(error instanceof Error ? error.message : 'An error occurred during registration');
     } finally {
       setLoading(false);
     }
   };
 
-  if (isConnected === false) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-md w-full space-y-8">
-          <div className="text-center">
-            <Database className="mx-auto h-12 w-12 text-gray-400" />
-            <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
-              Database Not Connected
-            </h2>
-            <p className="mt-2 text-center text-sm text-gray-600">
-              {!isSupabaseConfigured() 
-                ? "Please click the \"Connect to Supabase\" button to set up your database connection."
-                : "Unable to connect to the database. Please try again later."}
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (success) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-md w-full space-y-8">
-          <div>
-            <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
-              Check your email
-            </h2>
-            <p className="mt-2 text-center text-sm text-gray-600">
-              We've sent you a confirmation email. Please check your inbox and follow
-              the instructions to complete your registration.
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-md w-full space-y-8">
-        <div>
-          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
-            Create your account
-          </h2>
-          <p className="mt-2 text-center text-sm text-gray-600">
-            Join us to manage your church administration
-          </p>
-        </div>
-        <form className="mt-8 space-y-6" onSubmit={handleRegister}>
-          <div className="rounded-md shadow-sm -space-y-px">
-            <div>
-              <label htmlFor="email-address" className="sr-only">
-                Email address
-              </label>
-              <input
-                id="email-address"
-                name="email"
-                type="email"
-                autoComplete="email"
-                required
-                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-t-md focus:outline-none focus:ring-primary-500 focus:border-primary-500 focus:z-10 sm:text-sm"
-                placeholder="Email address"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-            </div>
-            <div>
-              <label htmlFor="password" className="sr-only">
-                Password
-              </label>
-              <input
-                id="password"
-                name="password"
-                type="password"
-                autoComplete="new-password"
-                required
-                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-none focus:ring-primary-500 focus:border-primary-500 focus:z-10 sm:text-sm"
-                placeholder="Password (minimum 6 characters)"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                minLength={6}
-              />
-            </div>
-          </div>
-
-          {error && (
-            <div className="rounded-md bg-red-50 p-4">
-              <div className="flex">
-                <div className="flex-shrink-0">
-                  {error.includes('internet') || error.includes('connection') ? (
-                    <Wifi className="h-5 w-5 text-red-400" />
-                  ) : error.includes('Database') ? (
-                    <Database className="h-5 w-5 text-red-400" />
-                  ) : (
-                    <AlertCircle className="h-5 w-5 text-red-400" />
-                  )}
-                </div>
-                <div className="ml-3">
-                  <h3 className="text-sm font-medium text-red-800">{error}</h3>
-                </div>
-              </div>
-            </div>
-          )}
-
-          <div>
-            <button
-              type="submit"
-              disabled={loading || !isConnected}
-              className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <span className="absolute left-0 inset-y-0 flex items-center pl-3">
-                {loading ? (
-                  <Loader2 className="h-5 w-5 text-primary-500 animate-spin" />
-                ) : (
-                  <UserPlus className="h-5 w-5 text-primary-500 group-hover:text-primary-400" />
-                )}
-              </span>
-              {loading ? 'Creating account...' : 'Create account'}
-            </button>
-          </div>
-
-          <div className="flex items-center justify-between">
-            <div className="text-sm">
+    <div className="min-h-screen flex">
+      <div className="flex-1 flex items-center justify-center px-4 sm:px-6 lg:px-8 py-12 bg-white">
+        <Card className="w-full max-w-2xl mx-auto">
+          <CardHeader className="text-center space-y-2">
+            <h2 className="text-3xl font-bold">
+              Register Your Church
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              Or{' '}
               <Link
                 to="/login"
-                className="font-medium text-primary-600 hover:text-primary-500"
+                className="font-medium text-primary hover:text-primary/90"
               >
-                Already have an account? Sign in
+                sign in to your account
               </Link>
+            </p>
+          </CardHeader>
+
+          <CardContent>
+            <form onSubmit={handleSubmit} className="space-y-8">
+              {/* Admin Account Section */}
+              <div>
+                <h3 className="text-lg font-medium mb-4">Admin Account</h3>
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <Input
+                      name="firstName"
+                      label="First Name"
+                      value={formData.firstName}
+                      onChange={(e) => setFormData(prev => ({ ...prev, firstName: e.target.value }))}
+                      required
+                      icon={<User />}
+                    />
+
+                    <Input
+                      name="lastName"
+                      label="Last Name"
+                      value={formData.lastName}
+                      onChange={(e) => setFormData(prev => ({ ...prev, lastName: e.target.value }))}
+                      required
+                      icon={<User />}
+                    />
+                  </div>
+
+                  <Input
+                    type="email"
+                    name="email"
+                    label="Email Address"
+                    value={formData.email}
+                    onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
+                    required
+                    icon={<Mail />}
+                  />
+
+                  <Input
+                    type="password"
+                    name="password"
+                    label="Password"
+                    value={formData.password}
+                    onChange={(e) => setFormData(prev => ({ ...prev, password: e.target.value }))}
+                    required
+                    icon={<Lock />}
+                    showPasswordToggle
+                    helperText="Must be at least 8 characters with uppercase, lowercase, and numbers"
+                  />
+
+                  <Input
+                    type="password"
+                    name="confirmPassword"
+                    label="Confirm Password"
+                    value={formData.confirmPassword}
+                    onChange={(e) => setFormData(prev => ({ ...prev, confirmPassword: e.target.value }))}
+                    required
+                    icon={<Lock />}
+                    showPasswordToggle
+                  />
+                </div>
+              </div>
+
+              <Separator />
+
+              {/* Church Information Section */}
+              <div>
+                <h3 className="text-lg font-medium mb-4">Church Information</h3>
+                <div className="space-y-4">
+                  <Input
+                    name="churchName"
+                    label="Church Name"
+                    value={formData.churchName}
+                    onChange={(e) => setFormData(prev => ({ ...prev, churchName: e.target.value }))}
+                    required
+                    icon={<Building2 />}
+                  />
+
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <Input
+                      name="subdomain"
+                      label="Subdomain"
+                      value={formData.subdomain}
+                      onChange={(e) => setFormData(prev => ({ 
+                        ...prev, 
+                        subdomain: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') 
+                      }))}
+                      required
+                      pattern="[a-z0-9-]+"
+                      icon={<Globe />}
+                      rightElement={
+                        <div className="px-3 py-2 bg-muted text-muted-foreground text-sm">
+                          .stewardtrack.com
+                        </div>
+                      }
+                      helperText="Only lowercase letters, numbers, and hyphens allowed"
+                    />
+
+                    <Input
+                      name="website"
+                      label="Church Website"
+                      value={formData.website}
+                      onChange={(e) => setFormData(prev => ({ ...prev, website: e.target.value }))}
+                      icon={<Globe />}
+                      placeholder="https://example.com"
+                    />
+                  </div>
+
+                  <Input
+                    name="address"
+                    label="Church Address"
+                    value={formData.address}
+                    onChange={(e) => setFormData(prev => ({ ...prev, address: e.target.value }))}
+                    required
+                    icon={<MapPin />}
+                  />
+
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <Input
+                      name="contactNumber"
+                      label="Contact Number"
+                      value={formData.contactNumber}
+                      onChange={(e) => setFormData(prev => ({ ...prev, contactNumber: e.target.value }))}
+                      required
+                      icon={<Phone />}
+                    />
+
+                    <Input
+                      type="email"
+                      name="churchEmail"
+                      label="Church Email"
+                      value={formData.churchEmail}
+                      onChange={(e) => setFormData(prev => ({ ...prev, churchEmail: e.target.value }))}
+                      required
+                      icon={<Mail />}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <Button
+                type="submit"
+                className="w-full"
+                disabled={loading}
+              >
+                {loading ? (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                ) : (
+                  'Register Church'
+                )}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Right side - Background Image */}
+      <div className="hidden lg:block relative w-0 flex-1">
+        <img
+          className="absolute inset-0 h-full w-full object-cover"
+          src="\landing_bg.svg"
+          alt="Church interior"
+        />
+        <div className="absolute inset-0 bg-primary-900 bg-opacity-50 backdrop-blur-sm"></div>
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="max-w-2xl mx-auto text-center text-white">
+            <h1 className="text-4xl font-bold mb-4">Welcome to Steward Track</h1>
+            <p className="text-xl">
+              Streamline your church administration with our comprehensive management solution
+            </p>
+            <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-6 text-left max-w-3xl mx-auto">
+              <div className="bg-white bg-opacity-10 backdrop-blur-sm p-6 rounded-lg">
+                <h3 className="text-lg font-semibold mb-2">Member Management</h3>
+                <p className="text-sm text-gray-100">
+                  Efficiently manage your church members, track attendance, and maintain detailed profiles.
+                </p>
+              </div>
+              <div className="bg-white bg-opacity-10 backdrop-blur-sm p-6 rounded-lg">
+                <h3 className="text-lg font-semibold mb-2">Financial Tools</h3>
+                <p className="text-sm text-gray-100">
+                  Track tithes, offerings, and expenses with our comprehensive financial management system.
+                </p>
+              </div>
+              <div className="bg-white bg-opacity-10 backdrop-blur-sm p-6 rounded-lg">
+                <h3 className="text-lg font-semibold mb-2">Reporting & Analytics</h3>
+                <p className="text-sm text-gray-100">
+                  Generate detailed reports and gain insights into your church's growth and activities.
+                </p>
+              </div>
             </div>
           </div>
-        </form>
+        </div>
       </div>
+
+      {/* Error Dialog */}
+      <AlertDialog open={!!error} onOpenChange={() => setError(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle variant="danger">
+              Registration Error
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {error}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogAction onClick={() => setError(null)}>
+            Try Again
+          </AlertDialogAction>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
