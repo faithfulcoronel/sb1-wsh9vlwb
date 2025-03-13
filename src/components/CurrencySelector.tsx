@@ -1,56 +1,54 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { useCurrencyStore, currencies } from '../stores/currencyStore';
-import { CheckCircle2 } from 'lucide-react';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from './ui2/select';
+import { DollarSign, CheckCircle2 } from 'lucide-react';
+import { Card, CardContent } from './ui2/card';
 
 function CurrencySelector() {
   const { currency, setCurrency } = useCurrencyStore();
-  const [showSuccess, setShowSuccess] = useState(false);
-
-  const handleCurrencyChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const newCurrency = currencies[e.target.value];
-    setCurrency(newCurrency);
-    setShowSuccess(true);
-    setTimeout(() => setShowSuccess(false), 2000);
-  };
-
-  useEffect(() => {
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === 'currency-settings') {
-        const newData = JSON.parse(e.newValue || '{}');
-        if (newData.state?.currency && newData.state.currency !== currency) {
-          setCurrency(newData.state.currency);
-        }
-      }
-    };
-
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
-  }, [currency, setCurrency]);
 
   return (
-    <div className="relative">
-      <select
-        value={currency.code}
-        onChange={handleCurrencyChange}
-        className="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
-      >
-        {Object.values(currencies).map((curr) => (
-          <option key={curr.code} value={curr.code}>
-            {curr.code} ({curr.symbol})
-          </option>
-        ))}
-      </select>
-      
-      {showSuccess && (
-        <div className="absolute top-0 -right-8 flex items-center">
-          <CheckCircle2 className="h-5 w-5 text-green-500 animate-bounce" />
+    <Card>
+      <CardContent className="p-4">
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <DollarSign className="h-5 w-5 text-muted-foreground" />
+              <h3 className="text-sm font-medium">Currency Settings</h3>
+            </div>
+            {currency && (
+              <div className="flex items-center text-sm text-success">
+                <CheckCircle2 className="h-4 w-4 mr-1" />
+                <span>Saved</span>
+              </div>
+            )}
+          </div>
+
+          <Select
+            value={currency.code}
+            onValueChange={(value) => setCurrency(currencies[value])}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Select currency" />
+            </SelectTrigger>
+            <SelectContent>
+              {Object.values(currencies).map((curr) => (
+                <SelectItem key={curr.code} value={curr.code}>
+                  <div className="flex items-center">
+                    <span className="mr-2">{curr.symbol}</span>
+                    <span>{curr.code}</span>
+                  </div>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <p className="text-sm text-muted-foreground">
+            Your currency preference is automatically saved
+          </p>
         </div>
-      )}
-      
-      <p className="mt-2 text-xs text-gray-500">
-        Your currency symbol preference is automatically saved
-      </p>
-    </div>
+      </CardContent>
+    </Card>
   );
 }
 

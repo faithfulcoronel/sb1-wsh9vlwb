@@ -70,11 +70,11 @@ export function MessageHandler() {
   if (messages.length === 0) return null;
 
   return (
-    <div className="fixed top-4 right-4 z-50 space-y-2 min-w-[320px] max-w-md">
+    <div className="fixed top-4 right-4 z-50 space-y-2 min-w-[320px] max-w-md pointer-events-none">
       {messages.map((message, index) => (
         <div
           key={index}
-          className={`rounded-md p-4 ${getMessageStyles(message.type)} shadow-lg transition-all duration-300 ease-in-out`}
+          className={`rounded-md p-4 ${getMessageStyles(message.type)} shadow-lg transition-all duration-300 ease-in-out pointer-events-auto`}
           role="alert"
         >
           <div className="flex">

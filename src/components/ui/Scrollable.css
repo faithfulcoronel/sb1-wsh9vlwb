@@ -1,0 +1,14 @@
+.scrollable::-webkit-scrollbar {
+    width: 8px;
+  }
+  .scrollable::-webkit-scrollbar-thumb {
+    background-color: #888;
+  }
+  .scrollbar-visible {
+    scrollbar-width: thin;
+    scrollbar-color: #888 transparent;
+  }
+  .scrollbar-hidden {
+    scrollbar-width: none;
+  }
+  
